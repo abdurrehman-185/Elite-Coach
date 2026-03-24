@@ -13,9 +13,12 @@ import {
   Send,
   Loader2,
   CheckCircle2,
-  AlertCircle
+  AlertCircle,
+  XCircle,
+  ChevronLeft
 } from 'lucide-react';
 import { useDropzone } from 'react-dropzone';
+import ReactMarkdown from 'react-markdown';
 import { cn } from './lib/utils';
 import { AppMode, CVAnalysis, FirmIntelligence, InterviewMessage } from './types';
 import { analyzeCV, getFirmIntelligence } from './services/ai';
@@ -44,6 +47,8 @@ export default function App() {
   const [cvAnalysis, setCvAnalysis] = useState<CVAnalysis | null>(null);
   const [intelligence, setIntelligence] = useState<FirmIntelligence | null>(null);
   const [messages, setMessages] = useState<InterviewMessage[]>([]);
+  const [sentiment, setSentiment] = useState(70);
+  const [awareness, setAwareness] = useState(50);
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const [cvText, setCvText] = useState('');
@@ -169,7 +174,11 @@ export default function App() {
       setMode('cv-analyzer');
     } catch (err: any) {
       console.error(err);
-      setError(err.message || 'An error occurred during analysis');
+      let msg = err.message || 'An error occurred during analysis';
+      if (msg.includes('RESOURCE_EXHAUSTED') || msg.includes('429')) {
+        msg = "Gemini API quota exceeded. Please wait a moment or try again later.";
+      }
+      setError(msg);
     } finally {
       setIsAnalyzing(false);
       setLoadingStep(null);
@@ -239,24 +248,63 @@ export default function App() {
       
       const ai = new GoogleGenAI({ apiKey });
       const chat = ai.chats.create({
-        model: "gemini-3.1-pro-preview",
+        model: "gemini-3-flash-preview",
         config: {
-          systemInstruction: `You are a Senior Partner at ${selectedFirm}. You are conducting a final round training contract interview. 
-          You are strict, highly professional, and do not accept generic answers. 
-          The user's CV context: ${cvText.substring(0, 2000)}.
-          Ask one firm-specific question at a time. Total 5 questions.
-          For each user response, evaluate it briefly (score 0-100, feedback, model answer) and then ask the next question.
-          After the 5th question, provide a final "Hire" or "No-Hire" verdict with a detailed summary of their performance.`
+          systemInstruction: `You are a Senior Partner at ${selectedFirm}. You are conducting a high-stakes final round training contract interview. 
+          
+          THE INTERVIEW FORMAT:
+          1. In your first response, introduce yourself and ask exactly 5 challenging questions at once. 
+          2. Use clear headings: "### QUESTION 1", "### QUESTION 2", etc.
+          3. Focus on: Commercial Awareness, Firm Fit, and Legal Logic.
+          4. IMPORTANT: Tell the candidate to reply in the same format:
+             ### QUESTION 1
+             [Answer]
+             ### QUESTION 2
+             [Answer]
+             ...and so on.
+          
+          THE EVALUATION FORMAT:
+          Once the candidate provides their answers, analyze the entire batch in a single response:
+          - Use clear Markdown headings and double spacing between sections.
+          - For EACH answer:
+            ### EVALUATION: QUESTION [X]
+            **Score:** [1-10]/10
+            **Partner's Critique:** [Detailed feedback]
+            **Elite Rewrite:** [How a top-tier candidate would answer]
+          
+          - THE VERDICT:
+            At the end, provide a clear verdict section:
+            # FINAL VERDICT: [PASS/FAIL]
+            ## TRUE SCORE: [X]/100
+            [Brief summary of why they passed or failed]
+          
+          CRITICAL: At the VERY END of your evaluation, you MUST include:
+          [[SENTIMENT: X, AWARENESS: Y]]
+          Where X and Y are numbers between 0 and 100.
+          
+          The user's CV context: ${cvText.substring(0, 2000)}.`
         }
       });
       chatSessionRef.current = chat;
 
-      const response = await chat.sendMessage({ message: "Start the interview. Introduce yourself briefly and ask the first question." });
+      const response = await chat.sendMessage({ message: "Start the interview. Introduce yourself and present all 5 questions now." });
       if (!response.text) throw new Error("No response from AI");
-      setMessages([{ role: 'assistant', content: response.text }]);
+      
+      // Extract scores
+      const scoreMatch = response.text.match(/\[\[SENTIMENT: (\d+), AWARENESS: (\d+)\]\]/);
+      if (scoreMatch) {
+        setSentiment(parseInt(scoreMatch[1]));
+        setAwareness(parseInt(scoreMatch[2]));
+      }
+
+      setMessages([{ role: 'assistant', content: response.text.replace(/\[\[.*?\]\]/g, "").trim() }]);
     } catch (err: any) {
       console.error(err);
-      setError('Failed to start interview');
+      let msg = 'Failed to start interview';
+      if (err.message?.includes('RESOURCE_EXHAUSTED') || err.message?.includes('429')) {
+        msg = "Gemini API quota exceeded. Please wait a moment or try again later.";
+      }
+      setError(msg);
     } finally {
       setIsTyping(false);
     }
@@ -272,18 +320,28 @@ export default function App() {
     setError(null);
 
     try {
-      console.log("Sending message to AI, question count:", questionCount);
+      console.log("Sending batch answers to AI");
       const response = await chatSessionRef.current.sendMessage({ 
-        message: questionCount >= 5 
-          ? `${userMsg}. This was my final answer. Please provide the final evaluation and verdict.` 
-          : userMsg 
+        message: `Here are my answers to all 5 questions: ${userMsg}. Please provide the full evaluation now.` 
       });
       if (!response.text) throw new Error("No response from AI");
-      setMessages(prev => [...prev, { role: 'assistant', content: response.text }]);
-      setQuestionCount(prev => prev + 1);
+      
+      // Extract scores
+      const scoreMatch = response.text.match(/\[\[SENTIMENT: (\d+), AWARENESS: (\d+)\]\]/);
+      if (scoreMatch) {
+        setSentiment(parseInt(scoreMatch[1]));
+        setAwareness(parseInt(scoreMatch[2]));
+      }
+
+      setMessages(prev => [...prev, { role: 'assistant', content: response.text.replace(/\[\[.*?\]\]/g, "").trim() }]);
+      setQuestionCount(5); // Mark as complete
     } catch (err: any) {
       console.error("Chat Error:", err);
-      setError('Failed to send message: ' + (err.message || 'Unknown error'));
+      let msg = 'Failed to send message: ' + (err.message || 'Unknown error');
+      if (err.message?.includes('RESOURCE_EXHAUSTED') || err.message?.includes('429')) {
+        msg = "Gemini API quota exceeded. Please wait a moment or try again later.";
+      }
+      setError(msg);
     } finally {
       setIsTyping(false);
     }
@@ -330,7 +388,16 @@ export default function App() {
           </select>
         </nav>
 
-        <div className="mt-auto pt-6 border-t border-white/5">
+        <div className="mt-auto pt-6 border-t border-white/5 space-y-4">
+          {error && error.includes('blocking session') && (
+            <button 
+              onClick={() => window.open(window.location.href, '_blank')}
+              className="w-full py-3 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 rounded-xl text-[10px] font-bold uppercase tracking-widest text-red-400 transition-all flex items-center justify-center gap-2"
+            >
+              <Shield size={12} />
+              Fix Session
+            </button>
+          )}
           <div className="flex items-center gap-3 px-4 py-3 text-zinc-500">
             <History size={18} />
             <span className="text-xs">Session History</span>
@@ -355,7 +422,7 @@ export default function App() {
                   <span className="text-emerald-500 italic">{selectedFirm}</span>
                 </h2>
                 <p className="text-zinc-400 text-lg max-w-2xl">
-                  The elite AI coach for Magic Circle training contracts. Upload your CV to begin the analysis or jump straight into intelligence gathering.
+                  The elite AI coach for Magic Circle training contracts. <span className="text-emerald-400 font-medium">Upload your CV first</span> for a highly refined, personalized interview experience tailored to your specific background.
                 </p>
                 {API_KEY_MISSING && (
                   <div className="mt-6 p-4 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center gap-3 text-amber-400 text-sm">
@@ -418,7 +485,14 @@ export default function App() {
                     <MessageSquare className="text-zinc-400 group-hover:text-purple-500 transition-colors" />
                   </div>
                   <div>
-                    <h3 className="text-xl font-medium text-white mb-1">Mock Interview</h3>
+                    <div className="flex items-center gap-3 mb-1">
+                      <h3 className="text-xl font-medium text-white">Mock Interview</h3>
+                      {!cvText && (
+                        <span className="text-[9px] bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 px-2 py-0.5 rounded-full font-bold uppercase tracking-widest animate-pulse">
+                          Pro Tip: Upload CV First
+                        </span>
+                      )}
+                    </div>
                     <p className="text-zinc-500 text-sm">Face a Senior Partner in a high-stakes simulation.</p>
                   </div>
                 </div>
@@ -438,13 +512,19 @@ export default function App() {
                     </div>
                     <button onClick={() => setError(null)} className="text-xs hover:text-white transition-colors">Dismiss</button>
                   </div>
-                  {error.includes('blocking cookies') && (
-                    <button 
-                      onClick={() => window.open(window.location.href, '_blank')}
-                      className="w-full py-2 bg-red-500/20 hover:bg-red-500/30 border border-red-500/30 rounded-lg text-xs font-bold uppercase tracking-widest transition-all"
-                    >
-                      Fix Session (Open in New Tab)
-                    </button>
+                  {error.includes('blocking session') && (
+                    <div className="space-y-4">
+                      <p className="text-[11px] text-red-300/70 leading-relaxed italic">
+                        This happens because the preview is running in an iframe. Opening the app in a new tab will authorize your browser session.
+                      </p>
+                      <button 
+                        onClick={() => window.open(window.location.href, '_blank')}
+                        className="w-full py-3 bg-red-500 text-white hover:bg-red-600 rounded-xl text-xs font-bold uppercase tracking-widest transition-all shadow-lg shadow-red-500/20 flex items-center justify-center gap-2"
+                      >
+                        <Shield size={14} />
+                        Fix Session (Open in New Tab)
+                      </button>
+                    </div>
                   )}
                 </motion.div>
               )}
@@ -559,48 +639,170 @@ export default function App() {
               key="mock-interview"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
-              className="h-full flex flex-col"
+              className="h-full flex flex-col relative"
             >
-              <div className="p-6 border-b border-white/5 flex items-center justify-between bg-[#0D0D0D]">
+              {/* Virtual Office Background */}
+              <div className="absolute inset-0 z-0 opacity-20 pointer-events-none">
+                <img 
+                  src="https://images.unsplash.com/photo-1497366216548-37526070297c?auto=format&fit=crop&q=80&w=1920" 
+                  alt="Virtual Office"
+                  className="w-full h-full object-cover grayscale"
+                  referrerPolicy="no-referrer"
+                />
+                <div className="absolute inset-0 bg-gradient-to-b from-[#0A0A0A] via-transparent to-[#0A0A0A]" />
+              </div>
+
+              <div className="p-6 border-b border-white/5 flex items-center justify-between bg-[#0D0D0D]/80 backdrop-blur-md z-10">
                 <div className="flex items-center gap-4">
                   <button onClick={() => setMode('dashboard')} className="text-zinc-500 hover:text-white">
                     <ChevronRight className="rotate-180" size={20} />
                   </button>
-                  <div>
-                    <h3 className="text-white font-medium">{selectedFirm} Interview</h3>
-                    <p className="text-[10px] text-zinc-500 uppercase tracking-widest">Question {questionCount} of 5</p>
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-full bg-zinc-800 border border-white/10 flex items-center justify-center overflow-hidden">
+                      <Briefcase className="text-zinc-400" size={20} />
+                    </div>
+                    <div>
+                      <h3 className="text-white font-medium">Senior Partner, {selectedFirm}</h3>
+                      <p className="text-[10px] text-zinc-500 uppercase tracking-widest">
+                        {questionCount === 1 ? "Awaiting Batch Answers" : "Evaluation Complete"}
+                      </p>
+                    </div>
                   </div>
                 </div>
-                <div className="flex items-center gap-4">
-                  <button 
-                    onClick={resetInterview}
-                    className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
-                  >
-                    Reset Interview
-                  </button>
-                  <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20">
-                    <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                    <span className="text-[10px] text-emerald-500 font-bold uppercase tracking-widest">Live Session</span>
+                
+                <div className="flex items-center gap-8">
+                  {/* Stress Indicators */}
+                  <div className="hidden md:flex items-center gap-6">
+                    <div className="space-y-1.5 w-32">
+                      <div className="flex justify-between text-[9px] uppercase tracking-tighter font-bold">
+                        <span className="text-zinc-500">Sentiment</span>
+                        <span className={cn(sentiment > 50 ? "text-emerald-500" : "text-red-500")}>{sentiment}%</span>
+                      </div>
+                      <div className="h-1 bg-white/5 rounded-full overflow-hidden">
+                        <motion.div 
+                          initial={{ width: 0 }}
+                          animate={{ width: `${sentiment}%` }}
+                          className={cn("h-full transition-colors duration-500", sentiment > 50 ? "bg-emerald-500" : "bg-red-500")}
+                        />
+                      </div>
+                    </div>
+                    <div className="space-y-1.5 w-32">
+                      <div className="flex justify-between text-[9px] uppercase tracking-tighter font-bold">
+                        <span className="text-zinc-500">Awareness</span>
+                        <span className={cn(awareness > 50 ? "text-blue-500" : "text-amber-500")}>{awareness}%</span>
+                      </div>
+                      <div className="h-1 bg-white/5 rounded-full overflow-hidden">
+                        <motion.div 
+                          initial={{ width: 0 }}
+                          animate={{ width: `${awareness}%` }}
+                          className={cn("h-full transition-colors duration-500", awareness > 50 ? "bg-blue-500" : "bg-amber-500")}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-4">
+                    <button 
+                      onClick={resetInterview}
+                      className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
+                    >
+                      Reset
+                    </button>
+                    <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20">
+                      <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                      <span className="text-[10px] text-emerald-500 font-bold uppercase tracking-widest">Live</span>
+                    </div>
                   </div>
                 </div>
               </div>
 
-              <div className="flex-1 overflow-y-auto p-8 space-y-8">
-                {messages.map((msg, i) => (
-                  <div key={i} className={cn(
-                    "flex flex-col max-w-3xl",
-                    msg.role === 'user' ? "ml-auto items-end" : "items-start"
-                  )}>
-                    <div className={cn(
-                      "p-6 rounded-2xl text-sm leading-relaxed",
-                      msg.role === 'user' 
-                        ? "bg-emerald-600 text-white rounded-tr-none" 
-                        : "bg-white/5 text-zinc-300 border border-white/5 rounded-tl-none"
+              <div className="flex-1 overflow-y-auto p-8 space-y-8 z-10">
+                {messages.map((msg, i) => {
+                  const isPass = msg.content.includes('FINAL VERDICT: PASS');
+                  const isFail = msg.content.includes('FINAL VERDICT: FAIL');
+                  const hasVerdict = isPass || isFail;
+
+                  return (
+                    <div key={i} className={cn(
+                      "flex flex-col max-w-4xl mx-auto",
+                      msg.role === 'user' ? "items-end" : "items-start"
                     )}>
-                      {msg.content}
+                      <div className={cn(
+                        "p-8 rounded-3xl text-sm leading-relaxed shadow-2xl",
+                        msg.role === 'user' 
+                          ? "bg-emerald-600 text-white rounded-tr-none" 
+                          : "bg-[#141414] text-zinc-300 border border-white/5 rounded-tl-none w-full"
+                      )}>
+                        {msg.role === 'assistant' ? (
+                          <div className="prose prose-invert prose-sm max-w-none">
+                            <ReactMarkdown
+                              components={{
+                                h1: ({node, ...props}) => <h1 className="text-2xl font-bold text-white mb-6 border-b border-white/10 pb-4" {...props} />,
+                                h2: ({node, ...props}) => <h2 className="text-xl font-semibold text-white mt-8 mb-4" {...props} />,
+                                h3: ({node, ...props}) => <h3 className="text-lg font-medium text-emerald-400 mt-6 mb-3 uppercase tracking-wider" {...props} />,
+                                p: ({node, ...props}) => <p className="mb-4 text-zinc-400 leading-relaxed" {...props} />,
+                                strong: ({node, ...props}) => <strong className="text-white font-semibold" {...props} />,
+                                ul: ({node, ...props}) => <ul className="list-disc list-inside mb-4 space-y-2" {...props} />,
+                              }}
+                            >
+                              {msg.content}
+                            </ReactMarkdown>
+
+                            {hasVerdict && (
+                              <motion.div 
+                                initial={{ scale: 0.9, opacity: 0 }}
+                                animate={{ scale: 1, opacity: 1 }}
+                                className={cn(
+                                  "mt-12 p-8 rounded-2xl border-2 flex flex-col items-center text-center gap-4",
+                                  isPass 
+                                    ? "bg-emerald-500/10 border-emerald-500/50" 
+                                    : "bg-red-500/10 border-red-500/50"
+                                )}
+                              >
+                                <div className={cn(
+                                  "w-16 h-16 rounded-full flex items-center justify-center mb-2",
+                                  isPass ? "bg-emerald-500 text-white" : "bg-red-500 text-white"
+                                )}>
+                                  {isPass ? <CheckCircle2 size={32} /> : <XCircle size={32} />}
+                                </div>
+                                <div>
+                                  <h2 className={cn(
+                                    "text-3xl font-black uppercase tracking-tighter mb-1",
+                                    isPass ? "text-emerald-400" : "text-red-400"
+                                  )}>
+                                    {isPass ? "OFFER EXTENDED" : "APPLICATION REJECTED"}
+                                  </h2>
+                                  <p className="text-zinc-500 text-xs uppercase tracking-widest font-bold">
+                                    Final Partner Review Complete
+                                  </p>
+                                </div>
+                                <div className="flex items-center gap-4 mt-4">
+                                  <div className="px-6 py-3 rounded-xl bg-white/5 border border-white/10">
+                                    <span className="block text-[10px] text-zinc-500 uppercase font-bold mb-1">True Score</span>
+                                    <span className="text-2xl font-mono text-white">
+                                      {msg.content.match(/TRUE SCORE: (\d+)\/100/)?.[1] || "N/A"}
+                                    </span>
+                                  </div>
+                                  <div className="px-6 py-3 rounded-xl bg-white/5 border border-white/10">
+                                    <span className="block text-[10px] text-zinc-500 uppercase font-bold mb-1">Status</span>
+                                    <span className={cn(
+                                      "text-2xl font-bold",
+                                      isPass ? "text-emerald-500" : "text-red-500"
+                                    )}>
+                                      {isPass ? "PASS" : "FAIL"}
+                                    </span>
+                                  </div>
+                                </div>
+                              </motion.div>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="whitespace-pre-wrap">{msg.content}</div>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
                 {isTyping && (
                   <div className="flex items-center gap-2 text-zinc-500 text-xs italic">
                     <Loader2 className="animate-spin" size={14} />
@@ -610,7 +812,7 @@ export default function App() {
                 <div ref={chatEndRef} />
               </div>
 
-              <div className="p-8 border-t border-white/5 bg-[#0D0D0D]">
+              <div className="p-8 border-t border-white/5 bg-[#0D0D0D]/80 backdrop-blur-md z-10">
                 <div className="max-w-3xl mx-auto relative">
                   <textarea 
                     value={input}
@@ -621,12 +823,13 @@ export default function App() {
                         handleSendMessage();
                       }
                     }}
-                    placeholder="Type your response..."
-                    className="w-full bg-[#141414] border border-white/10 rounded-2xl px-6 py-4 pr-16 text-sm text-zinc-300 focus:outline-none focus:border-emerald-500/50 transition-colors resize-none h-24"
+                    placeholder={questionCount === 1 ? "Provide all 5 answers here...\n\n### QUESTION 1\n[Your Answer]\n\n### QUESTION 2\n[Your Answer]..." : "Interview complete."}
+                    disabled={questionCount > 1}
+                    className="w-full bg-[#141414] border border-white/10 rounded-2xl px-6 py-4 pr-16 text-sm text-zinc-300 focus:outline-none focus:border-emerald-500/50 transition-colors resize-none h-48"
                   />
                   <button 
                     onClick={handleSendMessage}
-                    disabled={isTyping || !input.trim()}
+                    disabled={isTyping || !input.trim() || questionCount > 1}
                     className="absolute right-4 bottom-4 w-10 h-10 bg-white rounded-xl flex items-center justify-center text-black hover:bg-emerald-500 hover:text-white transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <Send size={18} />
