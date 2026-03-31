@@ -37,6 +37,19 @@ const FIRMS = [
   "Herbert Smith Freehills"
 ];
 
+const LAWYER_JOKES = [
+  "Why did the lawyer cross the road? To sue the chicken.",
+  "What's the difference between a lawyer and a vampire? A vampire only sucks blood at night.",
+  "How many lawyers does it take to change a light bulb? How many can you afford?",
+  "What do you call a lawyer with an IQ of 50? Your Honor.",
+  "What's the difference between a good lawyer and a great lawyer? A good lawyer knows the law; a great lawyer knows the judge.",
+  "Why don't sharks attack lawyers? Professional courtesy.",
+  "What do you call 5000 lawyers at the bottom of the ocean? A good start.",
+  "What's the difference between a lawyer and a trampoline? You take your shoes off to jump on a trampoline.",
+  "Why did the lawyer get a job at the bakery? He was good at making dough.",
+  "What's the difference between a lawyer and a pit bull? A pit bull eventually lets go."
+];
+
 const API_KEY_MISSING = !process.env.GEMINI_API_KEY;
 
 export default function App() {
@@ -51,10 +64,21 @@ export default function App() {
   const [awareness, setAwareness] = useState(50);
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
+  const [currentJoke, setCurrentJoke] = useState(LAWYER_JOKES[0]);
   const [cvText, setCvText] = useState('');
   const [error, setError] = useState<string | null>(null);
   const chatSessionRef = useRef<any>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let jokeInterval: any;
+    if (isTyping) {
+      jokeInterval = setInterval(() => {
+        setCurrentJoke(LAWYER_JOKES[Math.floor(Math.random() * LAWYER_JOKES.length)]);
+      }, 4000);
+    }
+    return () => clearInterval(jokeInterval);
+  }, [isTyping]);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -256,10 +280,10 @@ export default function App() {
       const chat = ai.chats.create({
         model: "gemini-3-flash-preview",
         config: {
-          systemInstruction: `You are a Senior Partner at ${selectedFirm}. You are conducting a high-stakes final round training contract interview. 
+          systemInstruction: `You are John, a Senior Partner at ${selectedFirm}. You are conducting a high-stakes final round training contract interview. 
           
           THE INTERVIEW FORMAT:
-          1. In your first response, introduce yourself and ask exactly 5 challenging questions at once. 
+          1. In your first response, introduce yourself as John and ask exactly 5 challenging questions at once. 
           2. Use clear headings: "### QUESTION 1", "### QUESTION 2", etc.
           3. Focus on: Commercial Awareness, Firm Fit, and Legal Logic.
           4. IMPORTANT: Tell the candidate to reply in the same format:
@@ -810,9 +834,19 @@ export default function App() {
                   );
                 })}
                 {isTyping && (
-                  <div className="flex items-center gap-2 text-zinc-500 text-xs italic">
-                    <Loader2 className="animate-spin" size={14} />
-                    Partner is typing...
+                  <div className="flex flex-col gap-2 max-w-md">
+                    <div className="flex items-center gap-2 text-zinc-500 text-xs italic">
+                      <Loader2 className="animate-spin" size={14} />
+                      Partner is typing...
+                    </div>
+                    <motion.div 
+                      initial={{ opacity: 0, x: -10 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      key={currentJoke}
+                      className="p-4 rounded-2xl bg-white/5 border border-white/5 text-[11px] text-zinc-500 italic leading-relaxed"
+                    >
+                      "{currentJoke}"
+                    </motion.div>
                   </div>
                 )}
                 <div ref={chatEndRef} />
