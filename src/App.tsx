@@ -392,7 +392,7 @@ export default function App() {
           <div className="w-10 h-10 bg-white rounded-lg flex items-center justify-center">
             <Shield className="text-black w-6 h-6" />
           </div>
-          <h1 className="text-xl font-serif font-semibold tracking-tight text-white">ELITE COACH</h1>
+          <h1 className="text-xl font-serif font-semibold tracking-tight text-white">CLERKED</h1>
         </div>
 
         <nav className="flex-1 space-y-2">
@@ -452,7 +452,7 @@ export default function App() {
                   <span className="text-emerald-500 italic">{selectedFirm}</span>
                 </h2>
                 <p className="text-zinc-400 text-lg max-w-2xl">
-                  The elite AI coach for Magic Circle training contracts. <span className="text-emerald-400 font-medium">Upload your CV first</span> for a highly refined, personalized interview experience tailored to your specific background.
+                  <span className="text-white font-serif italic">Clerked</span> — The elite AI coach for Magic Circle training contracts. <span className="text-emerald-400 font-medium">Upload your CV first</span> for a highly refined, personalized interview experience tailored to your specific background.
                 </p>
                 {API_KEY_MISSING && (
                   <div className="mt-6 p-4 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center gap-3 text-amber-400 text-sm">
