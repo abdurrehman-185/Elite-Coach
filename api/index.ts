@@ -1,5 +1,4 @@
 import express from "express";
-import { createServer as createViteServer } from "vite";
 import path from "path";
 import fs from "fs";
 import multer from "multer";
@@ -11,11 +10,9 @@ const require = createRequire(import.meta.url);
 const pdf = require("pdf-parse");
 
 const app = express();
-const PORT = 3000;
 
 // Logging middleware
 app.use((req, res, next) => {
-  const start = Date.now();
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
   next();
 });
@@ -31,37 +28,27 @@ const upload = multer({
 // API Router
 const apiRouter = express.Router();
 
-apiRouter.get("/test", (req, res) => {
-  res.json({ message: "API is working", timestamp: new Date().toISOString() });
-});
-
 apiRouter.get("/health", (req, res) => {
-  res.json({ status: "ok", version: "1.0.3", timestamp: new Date().toISOString() });
+  res.json({ status: "ok", env: process.env.NODE_ENV, vercel: !!process.env.VERCEL });
 });
 
 // API: Parse PDF
 apiRouter.post("/parse-pdf", upload.single("file"), async (req, res) => {
-  console.log("Received PDF parse request");
   try {
     if (!req.file) {
-      console.error("No file in request");
       return res.status(400).json({ error: "No file uploaded" });
     }
     
-    console.log("File received:", req.file.originalname, "Size:", req.file.size);
-    
-    let pdfParser: any = pdf;
+    let pdfParser = pdf;
     if (typeof pdfParser !== "function" && pdfParser && typeof pdfParser.default === "function") {
       pdfParser = pdfParser.default;
     }
 
     if (typeof pdfParser !== "function") {
-      return res.status(500).json({ error: "PDF parser not correctly loaded." });
+      throw new Error("PDF parser is not a function");
     }
     
     const data = await pdfParser(req.file.buffer);
-    console.log("PDF Parsed successfully, text length:", data.text?.length);
-    
     if (!data.text || data.text.trim().length === 0) {
       return res.status(422).json({ error: "PDF contains no readable text" });
     }
@@ -69,26 +56,12 @@ apiRouter.post("/parse-pdf", upload.single("file"), async (req, res) => {
     res.json({ text: data.text });
   } catch (error: any) {
     console.error("PDF Parsing Error:", error);
-    let message = "Unknown error";
-    if (error instanceof Error) {
-      message = error.message;
-    } else if (typeof error === 'string') {
-      message = error;
-    } else {
-      try {
-        message = JSON.stringify(error);
-      } catch (e) {
-        message = String(error);
-      }
-    }
     res.status(500).json({ 
-      error: `Failed to parse PDF: ${message}`,
-      details: process.env.NODE_ENV !== 'production' ? error : undefined
+      error: `Failed to parse PDF: ${error.message || String(error)}`
     });
   }
 });
 
-// API: Search Firms (Tavily Proxy)
 apiRouter.post("/search-firms", async (req, res) => {
   const { query } = req.body;
   const apiKey = process.env.TAVILY_API_KEY;
@@ -96,11 +69,9 @@ apiRouter.post("/search-firms", async (req, res) => {
   if (!apiKey) {
     return res.json({
       results: [
-        { title: `${query || "The Firm"} - Training Contracts`, url: "https://careers.example.com", content: `${query || "This firm"} is a top-tier firm looking for commercially aware candidates with strong academic backgrounds.` },
-        { title: "Magic Circle Graduate Careers", url: "https://careers.example.com", content: "Elite firms offer world-class training and complex cross-border work for future solicitors." },
-        { title: "Legal Cheek - Firm Profile", url: "https://www.legalcheek.com", content: "Detailed breakdown of salary, hours, and culture at top UK law firms." }
+        { title: `${query || "The Firm"} - Training Contracts`, url: "https://careers.example.com", content: `${query || "This firm"} is a top-tier firm looking for commercially aware candidates.` }
       ],
-      note: "Using mock data because TAVILY_API_KEY is missing."
+      note: "Mock data (No API Key)"
     });
   }
 
@@ -113,59 +84,28 @@ apiRouter.post("/search-firms", async (req, res) => {
     });
     res.json(response.data);
   } catch (error: any) {
-    console.error("Search Error:", error.response?.status, error.response?.data || error.message);
-    if (error.response?.status === 401) {
-      return res.json({
-        results: [
-          { title: `${query || "The Firm"} - Training Contracts`, url: "https://careers.example.com", content: `${query || "This firm"} is a top-tier firm looking for commercially aware candidates with strong academic backgrounds.` },
-          { title: "Magic Circle Graduate Careers", url: "https://careers.example.com", content: "Elite firms offer world-class training and complex cross-border work for future solicitors." },
-          { title: "Legal Cheek - Firm Profile", url: "https://www.legalcheek.com", content: "Detailed breakdown of salary, hours, and culture at top UK law firms." }
-        ],
-        note: "Using mock data due to invalid API key."
-      });
-    }
-    res.status(500).json({ error: "Search failed: " + (error.response?.data?.detail || error.message) });
+    res.status(500).json({ error: "Search failed" });
   }
 });
 
 app.use("/api", apiRouter);
 
-// Global error handler
-app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
-  console.error("Global Error Handler:", err);
-  const message = err instanceof Error ? err.message : (typeof err === 'string' ? err : JSON.stringify(err));
-  res.status(err.status || 500).json({
-    error: message || "Internal Server Error"
-  });
-});
-
 // Export for Vercel
 export default app;
 
-// Local server start
-if (process.env.NODE_ENV !== "production" || !process.env.VERCEL) {
-  const startServer = async () => {
-    const distPath = path.join(process.cwd(), "dist");
-    if (process.env.NODE_ENV !== "production" || !fs.existsSync(distPath)) {
-      const vite = await createViteServer({
-        server: { middlewareMode: true },
-        appType: "spa",
-      });
-      app.use(vite.middlewares);
-    } else {
-      app.use(express.static(distPath));
-      app.get("*", (req, res) => {
-        res.sendFile(path.join(distPath, "index.html"));
-      });
-    }
-
+// Local development server
+if (process.env.NODE_ENV !== "production" && !process.env.VERCEL) {
+  const PORT = 3000;
+  const startDevServer = async () => {
+    const { createServer: createViteServer } = await import("vite");
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: "spa",
+    });
+    app.use(vite.middlewares);
     app.listen(PORT, "0.0.0.0", () => {
-      console.log(`Server running on http://localhost:${PORT}`);
+      console.log(`Dev server running on http://localhost:${PORT}`);
     });
   };
-
-  startServer().catch(err => {
-    console.error("Failed to start server:", err);
-    process.exit(1);
-  });
+  startDevServer();
 }
