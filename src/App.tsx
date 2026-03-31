@@ -145,8 +145,14 @@ export default function App() {
         if (isJson) {
           try {
             const errData = JSON.parse(text);
-            errorMessage = errData.error || errorMessage;
-          } catch (e) {}
+            if (typeof errData.error === 'string') {
+              errorMessage = errData.error;
+            } else if (errData.error && typeof errData.error === 'object') {
+              errorMessage = errData.error.message || JSON.stringify(errData.error);
+            }
+          } catch (e) {
+            console.error("Error parsing error JSON:", e);
+          }
         } else {
           const isHtml = text.toLowerCase().includes('<!doctype html>') || text.toLowerCase().includes('<html>');
           if (isHtml) {

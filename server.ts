@@ -111,9 +111,13 @@ async function startServer() {
       }
 
       res.json({ text: data.text });
-    } catch (error) {
+    } catch (error: any) {
       console.error("PDF Parsing Error:", error);
-      res.status(500).json({ error: "Failed to parse PDF: " + (error instanceof Error ? error.message : String(error)) });
+      const message = error instanceof Error ? error.message : (typeof error === 'string' ? error : JSON.stringify(error));
+      res.status(500).json({ 
+        error: `Failed to parse PDF: ${message}`,
+        details: process.env.NODE_ENV !== 'production' ? error : undefined
+      });
     }
   });
 
