@@ -23,7 +23,7 @@ const parseJSON = (text: string) => {
 export const analyzeCV = async (cvText: string, targetFirm: string): Promise<CVAnalysis> => {
   const ai = getAI();
   const response = await ai.models.generateContent({
-    model: "gemini-3-flash-preview",
+    model: "gemini-3.1-flash-lite-preview",
     contents: `Analyze this CV for a Training Contract at ${targetFirm}. 
     Act as a ruthless but fair Magic Circle recruiting partner.
     CV Content: ${cvText.substring(0, 2000)}`,
@@ -59,7 +59,7 @@ export const analyzeCV = async (cvText: string, targetFirm: string): Promise<CVA
 export const getFirmIntelligence = async (firmName: string, searchData: string): Promise<FirmIntelligence> => {
   const ai = getAI();
   const response = await ai.models.generateContent({
-    model: "gemini-3-flash-preview",
+    model: "gemini-3.1-flash-lite-preview",
     contents: `Based on this search data, provide intelligence on ${firmName}.
     Search Data: ${searchData}`,
     config: {

@@ -15,7 +15,9 @@ import {
   CheckCircle2,
   AlertCircle,
   XCircle,
-  ChevronLeft
+  ChevronLeft,
+  Share2,
+  Users
 } from 'lucide-react';
 import { useDropzone } from 'react-dropzone';
 import ReactMarkdown from 'react-markdown';
@@ -67,6 +69,7 @@ export default function App() {
   const [currentJoke, setCurrentJoke] = useState(LAWYER_JOKES[0]);
   const [cvText, setCvText] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [showUpgradeModal, setShowUpgradeModal] = useState(false);
   const chatSessionRef = useRef<any>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
@@ -98,7 +101,7 @@ export default function App() {
     };
     
     initSession();
-
+    
     const headers = { 
       'X-Requested-With': 'XMLHttpRequest',
       'Accept': 'application/json'
@@ -278,7 +281,7 @@ export default function App() {
       
       const ai = new GoogleGenAI({ apiKey });
       const chat = ai.chats.create({
-        model: "gemini-3-flash-preview",
+        model: "gemini-3.1-flash-lite-preview",
         config: {
           systemInstruction: `You are John, a Senior Partner at ${selectedFirm}. You are conducting a high-stakes final round training contract interview. 
           
@@ -352,6 +355,7 @@ export default function App() {
     try {
       console.log("Sending batch answers to AI");
       const response = await chatSessionRef.current.sendMessage({ 
+        model: "gemini-3.1-flash-lite-preview",
         message: `Here are my answers to all 5 questions: ${userMsg}. Please provide the full evaluation now.` 
       });
       if (!response.text) throw new Error("No response from AI");
@@ -419,6 +423,36 @@ export default function App() {
         </nav>
 
         <div className="mt-auto pt-6 border-t border-white/5 space-y-4">
+          <div className="p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/20">
+            <div className="flex items-center gap-2 mb-2">
+              <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+              <span className="text-[10px] text-emerald-500 font-bold uppercase tracking-widest">Pro Plan</span>
+            </div>
+            <p className="text-[11px] text-zinc-400 mb-3 leading-relaxed">Get unlimited CV analyses and priority interview slots.</p>
+            <button 
+              onClick={() => setShowUpgradeModal(true)}
+              className="w-full py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl text-[10px] font-bold uppercase tracking-widest transition-all flex items-center justify-center gap-1"
+            >
+              Upgrade Now — <span className="line-through opacity-60">£19.99</span> <span className="text-white">£9.99/mo</span>
+            </button>
+          </div>
+
+          <div className="p-4 rounded-2xl bg-white/[0.02] border border-white/5">
+            <div className="flex items-center gap-2 mb-2">
+              <Users size={14} className="text-zinc-500" />
+              <span className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest">Referral Program</span>
+            </div>
+            <p className="text-[11px] text-zinc-500 mb-3">Invite 3 friends to get 1 week of Pro for free.</p>
+            <button 
+              onClick={() => {
+                navigator.clipboard.writeText(`Check out Clerked - the AI coach for Magic Circle law interviews: ${window.location.origin}`);
+                alert("Referral link copied!");
+              }}
+              className="w-full py-2 bg-white/5 hover:bg-white/10 text-white rounded-xl text-[10px] font-bold uppercase tracking-widest transition-all border border-white/10"
+            >
+              Copy Invite Link
+            </button>
+          </div>
           {error && error.includes('blocking session') && (
             <button 
               onClick={() => window.open(window.location.href, '_blank')}
@@ -540,7 +574,17 @@ export default function App() {
                       <AlertCircle size={18} />
                       {error}
                     </div>
-                    <button onClick={() => setError(null)} className="text-xs hover:text-white transition-colors">Dismiss</button>
+                    <div className="flex items-center gap-2">
+                      {(error.includes('quota') || error.includes('demand') || error.includes('UNAVAILABLE')) && (
+                        <button 
+                          onClick={() => handleSearch()}
+                          className="px-3 py-1 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-all"
+                        >
+                          Try Again
+                        </button>
+                      )}
+                      <button onClick={() => setError(null)} className="text-xs hover:text-white transition-colors">Dismiss</button>
+                    </div>
                   </div>
                   {error.includes('blocking session') && (
                     <div className="space-y-4">
@@ -806,22 +850,23 @@ export default function App() {
                                     Final Partner Review Complete
                                   </p>
                                 </div>
-                                <div className="flex items-center gap-4 mt-4">
-                                  <div className="px-6 py-3 rounded-xl bg-white/5 border border-white/10">
-                                    <span className="block text-[10px] text-zinc-500 uppercase font-bold mb-1">True Score</span>
-                                    <span className="text-2xl font-mono text-white">
-                                      {msg.content.match(/TRUE SCORE: (\d+)\/100/)?.[1] || "N/A"}
-                                    </span>
-                                  </div>
-                                  <div className="px-6 py-3 rounded-xl bg-white/5 border border-white/10">
-                                    <span className="block text-[10px] text-zinc-500 uppercase font-bold mb-1">Status</span>
-                                    <span className={cn(
-                                      "text-2xl font-bold",
-                                      isPass ? "text-emerald-500" : "text-red-500"
-                                    )}>
-                                      {isPass ? "PASS" : "FAIL"}
-                                    </span>
-                                  </div>
+                                <div className="flex flex-col sm:flex-row items-center gap-4 mt-8">
+                                  <button 
+                                    onClick={() => {
+                                      const text = `I just scored ${msg.content.match(/TRUE SCORE: (\d+)\/100/)?.[1] || "N/A"}/100 in a Magic Circle mock interview on Clerked! 🚀\n\nThink you can beat my score? Try it here: ${window.location.origin}`;
+                                      window.open(`https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent(window.location.origin)}&text=${encodeURIComponent(text)}`, '_blank');
+                                    }}
+                                    className="flex items-center gap-2 px-6 py-3 bg-[#0077b5] hover:bg-[#0077b5]/90 text-white rounded-xl text-xs font-bold uppercase tracking-widest transition-all"
+                                  >
+                                    <Share2 size={16} />
+                                    Share on LinkedIn
+                                  </button>
+                                  <button 
+                                    onClick={() => setMode('dashboard')}
+                                    className="px-6 py-3 bg-white/5 hover:bg-white/10 text-white rounded-xl text-xs font-bold uppercase tracking-widest transition-all border border-white/10"
+                                  >
+                                    Back to Dashboard
+                                  </button>
                                 </div>
                               </motion.div>
                             )}
@@ -853,6 +898,31 @@ export default function App() {
               </div>
 
               <div className="p-8 border-t border-white/5 bg-[#0D0D0D]/80 backdrop-blur-md z-10">
+                {error && (
+                  <motion.div 
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="max-w-3xl mx-auto mb-6 p-4 rounded-xl bg-red-500/10 border border-red-500/20 flex flex-col gap-3 text-red-400 text-sm"
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-3">
+                        <AlertCircle size={18} />
+                        {error}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {(error.includes('quota') || error.includes('demand') || error.includes('UNAVAILABLE')) && (
+                          <button 
+                            onClick={() => handleSendMessage()}
+                            className="px-3 py-1 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-all"
+                          >
+                            Try Again
+                          </button>
+                        )}
+                        <button onClick={() => setError(null)} className="text-xs hover:text-white transition-colors">Dismiss</button>
+                      </div>
+                    </div>
+                  </motion.div>
+                )}
                 <div className="max-w-3xl mx-auto relative">
                   <textarea 
                     value={input}
@@ -879,6 +949,64 @@ export default function App() {
                   Professionalism is expected. Be concise and commercially focused.
                 </p>
               </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Upgrade Modal */}
+        <AnimatePresence>
+          {showUpgradeModal && (
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/80 backdrop-blur-sm"
+            >
+              <motion.div 
+                initial={{ scale: 0.9, y: 20 }}
+                animate={{ scale: 1, y: 0 }}
+                exit={{ scale: 0.9, y: 20 }}
+                className="bg-[#141414] border border-white/10 rounded-3xl p-8 max-w-md w-full text-center relative overflow-hidden"
+              >
+                <div className="absolute top-0 left-0 w-full h-1 bg-emerald-500" />
+                <button 
+                  onClick={() => setShowUpgradeModal(false)}
+                  className="absolute top-4 right-4 text-zinc-500 hover:text-white transition-colors"
+                >
+                  <XCircle size={24} />
+                </button>
+                
+                <div className="w-16 h-16 bg-emerald-500/10 rounded-2xl flex items-center justify-center mx-auto mb-6">
+                  <Shield className="text-emerald-500" size={32} />
+                </div>
+                
+                <h3 className="text-2xl font-serif text-white mb-2">Clerked Pro</h3>
+                <p className="text-zinc-400 text-sm mb-8 leading-relaxed">
+                  We're currently integrating Stripe for secure payments. <br />
+                  <span className="text-emerald-400 font-medium italic">Join the waitlist</span> to lock in <span className="line-through opacity-50">£19.99</span> <span className="text-emerald-400 font-bold">£9.99/mo</span> (50% OFF) for your first year!
+                </p>
+                
+                <div className="space-y-4">
+                  <input 
+                    type="email" 
+                    placeholder="Enter your email"
+                    className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-emerald-500/50 transition-colors"
+                  />
+                  <button 
+                    onClick={() => {
+                      alert("You're on the list! We'll notify you when Pro launches.");
+                      setShowUpgradeModal(false);
+                    }}
+                    className="w-full py-4 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl text-xs font-bold uppercase tracking-widest transition-all"
+                  >
+                    Join the Waitlist
+                  </button>
+                </div>
+                
+                <p className="mt-6 text-[10px] text-zinc-600 uppercase tracking-widest">
+                  No credit card required for waitlist
+                </p>
+              </motion.div>
             </motion.div>
           )}
         </AnimatePresence>
