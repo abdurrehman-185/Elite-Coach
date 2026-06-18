@@ -1,383 +1,233 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
-import { 
-  FileText, 
-  Search, 
-  MessageSquare, 
-  Upload, 
-  ChevronRight, 
-  BarChart3, 
-  History, 
-  Shield, 
-  Briefcase,
-  Send,
-  Loader2,
-  CheckCircle2,
+import {useEffect, useRef, useState} from 'react';
+import {AnimatePresence, motion} from 'motion/react';
+import {
   AlertCircle,
+  BarChart3,
+  Briefcase,
+  CheckCircle2,
+  ChevronRight,
+  FileText,
+  History,
+  Loader2,
+  MessageSquare,
+  Search,
+  Send,
+  Shield,
+  Upload,
+  Users,
   XCircle,
-  ChevronLeft,
-  Share2,
-  Users
 } from 'lucide-react';
-import { useDropzone } from 'react-dropzone';
 import ReactMarkdown from 'react-markdown';
-import { cn } from './lib/utils';
-import { AppMode, CVAnalysis, FirmIntelligence, InterviewMessage } from './types';
-import { analyzeCV, getFirmIntelligence } from './services/ai';
-import { GoogleGenAI } from '@google/genai';
+import {useDropzone} from 'react-dropzone';
+import {cn} from './lib/utils';
+import {AppMode, CVAnalysis, FirmIntelligence, InterviewMessage} from './types';
+import {
+  analyzeCV,
+  evaluateMockInterview,
+  getFirmIntelligence,
+  startMockInterview,
+} from './services/ai';
 
 const FIRMS = [
-  "Clifford Chance",
-  "Linklaters",
-  "Freshfields Bruckhaus Deringer",
-  "Allen & Overy",
-  "Slaughter and May",
-  "Latham & Watkins",
-  "Kirkland & Ellis",
-  "White & Case",
-  "Skadden",
-  "Herbert Smith Freehills"
+  'Clifford Chance',
+  'Linklaters',
+  'Freshfields Bruckhaus Deringer',
+  'Allen & Overy',
+  'Slaughter and May',
+  'Latham & Watkins',
+  'Kirkland & Ellis',
+  'White & Case',
+  'Skadden',
+  'Herbert Smith Freehills',
 ];
 
-const LAWYER_JOKES = [
-  "Why did the lawyer cross the road? To sue the chicken.",
-  "What's the difference between a lawyer and a vampire? A vampire only sucks blood at night.",
-  "How many lawyers does it take to change a light bulb? How many can you afford?",
-  "What do you call a lawyer with an IQ of 50? Your Honor.",
-  "What's the difference between a good lawyer and a great lawyer? A good lawyer knows the law; a great lawyer knows the judge.",
-  "Why don't sharks attack lawyers? Professional courtesy.",
-  "What do you call 5000 lawyers at the bottom of the ocean? A good start.",
-  "What's the difference between a lawyer and a trampoline? You take your shoes off to jump on a trampoline.",
-  "Why did the lawyer get a job at the bakery? He was good at making dough.",
-  "What's the difference between a lawyer and a pit bull? A pit bull eventually lets go."
+const LOADING_LINES = [
+  'Checking commercial awareness...',
+  'Reading between the bullet points...',
+  'Calibrating partner-level scrutiny...',
+  'Testing the business case...',
 ];
-
-const API_KEY_MISSING = !process.env.GEMINI_API_KEY;
 
 export default function App() {
   const [mode, setMode] = useState<AppMode>('dashboard');
-  const [selectedFirm, setSelectedFirm] = useState<string>(FIRMS[0]);
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [loadingStep, setLoadingStep] = useState<string | null>(null);
+  const [selectedFirm, setSelectedFirm] = useState(FIRMS[0]);
+  const [cvText, setCvText] = useState('');
   const [cvAnalysis, setCvAnalysis] = useState<CVAnalysis | null>(null);
   const [intelligence, setIntelligence] = useState<FirmIntelligence | null>(null);
   const [messages, setMessages] = useState<InterviewMessage[]>([]);
-  const [sentiment, setSentiment] = useState(70);
-  const [awareness, setAwareness] = useState(50);
   const [input, setInput] = useState('');
-  const [isTyping, setIsTyping] = useState(false);
-  const [currentJoke, setCurrentJoke] = useState(LAWYER_JOKES[0]);
-  const [cvText, setCvText] = useState('');
+  const [questionCount, setQuestionCount] = useState(0);
+  const [interviewComplete, setInterviewComplete] = useState(false);
+  const [isWorking, setIsWorking] = useState(false);
+  const [loadingStep, setLoadingStep] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
-  const chatSessionRef = useRef<any>(null);
+  const [sentiment, setSentiment] = useState(70);
+  const [awareness, setAwareness] = useState(50);
+  const [loadingLine, setLoadingLine] = useState(LOADING_LINES[0]);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    let jokeInterval: any;
-    if (isTyping) {
-      jokeInterval = setInterval(() => {
-        setCurrentJoke(LAWYER_JOKES[Math.floor(Math.random() * LAWYER_JOKES.length)]);
-      }, 4000);
-    }
-    return () => clearInterval(jokeInterval);
-  }, [isTyping]);
+    chatEndRef.current?.scrollIntoView({behavior: 'smooth'});
+  }, [messages, isWorking]);
 
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+    if (!isWorking) return;
+    const id = window.setInterval(() => {
+      setLoadingLine(LOADING_LINES[Math.floor(Math.random() * LOADING_LINES.length)]);
+    }, 3500);
+    return () => window.clearInterval(id);
+  }, [isWorking]);
 
   useEffect(() => {
-    const initSession = async () => {
-      try {
-        // Pre-flight to establish session/cookies
-        await fetch('/api/health', { 
-          credentials: 'include',
-          headers: { 'X-Requested-With': 'XMLHttpRequest' }
-        });
-      } catch (e) {
-        console.warn("Session init pre-flight:", e);
-      }
-    };
-    
-    initSession();
-    
-    const headers = { 
-      'X-Requested-With': 'XMLHttpRequest',
-      'Accept': 'application/json'
-    };
-
-    fetch('/api/test', { credentials: 'include', headers })
-      .then(async res => {
-        const contentType = res.headers.get("content-type");
-        if (res.ok && contentType && contentType.includes("application/json")) {
-          return res.json();
-        }
-        throw new Error(`Status ${res.status}: ${await res.text().then(t => t.substring(0, 50))}`);
-      })
-      .then(data => console.log("API Test Success:", data))
-      .catch(err => console.warn("API Test (Expected during restart):", err.message));
-
-    fetch('/api/debug-pdf', { credentials: 'include', headers })
-      .then(async res => {
-        const contentType = res.headers.get("content-type");
-        if (res.ok && contentType && contentType.includes("application/json")) {
-          return res.json();
-        }
-        throw new Error(`Status ${res.status}: ${await res.text().then(t => t.substring(0, 50))}`);
-      })
-      .then(data => console.log("PDF Parser Debug Success:", data))
-      .catch(err => console.warn("PDF Parser Debug Failed:", err.message));
+    fetch('/api/health', {
+      credentials: 'include',
+      headers: {'X-Requested-With': 'XMLHttpRequest'},
+    }).catch(() => undefined);
   }, []);
 
+  const formatAIError = (fallback: string, err: unknown) => {
+    const message = err instanceof Error ? err.message : String(err || fallback);
+    if (message.includes('429') || message.toLowerCase().includes('quota')) {
+      return 'AI quota exceeded. Please wait a moment and try again.';
+    }
+    return message || fallback;
+  };
+
   const onDrop = async (acceptedFiles: File[], rejectedFiles: any[]) => {
-    console.log("onDrop called with files:", acceptedFiles, "Rejected:", rejectedFiles);
-    
-    if (rejectedFiles.length > 0) {
-      setError(`File rejected: ${rejectedFiles[0].errors[0].message}. Please upload a valid PDF.`);
+    if (rejectedFiles.length) {
+      setError(rejectedFiles[0]?.errors?.[0]?.message || 'Please upload a valid PDF.');
       return;
     }
 
     const file = acceptedFiles[0];
-    if (!file) {
-      console.warn("No file accepted");
-      return;
-    }
+    if (!file) return;
 
-    setIsAnalyzing(true);
-    setLoadingStep("Parsing PDF...");
+    setIsWorking(true);
+    setLoadingStep('Parsing PDF...');
     setError(null);
-    const formData = new FormData();
-    formData.append('file', file);
 
     try {
-      console.log("Starting PDF parse for file:", file.name);
-      const res = await fetch('/api/parse-pdf', { 
-        method: 'POST', 
+      const formData = new FormData();
+      formData.append('file', file);
+      const response = await fetch('/api/parse-pdf', {
+        method: 'POST',
         body: formData,
         credentials: 'include',
         headers: {
+          Accept: 'application/json',
           'X-Requested-With': 'XMLHttpRequest',
-          'Accept': 'application/json'
-        }
+        },
       });
-      
-      const contentType = res.headers.get("content-type");
-      const isJson = contentType && contentType.includes("application/json");
-      
-      if (!res.ok || !isJson) {
-        const text = await res.text();
-        let errorMessage = 'Failed to parse PDF';
-        
-        if (isJson) {
-          try {
-            const errData = JSON.parse(text);
-            if (typeof errData.error === 'string') {
-              errorMessage = errData.error;
-            } else if (errData.error && typeof errData.error === 'object') {
-              errorMessage = errData.error.message || JSON.stringify(errData.error);
-            }
-          } catch (e) {
-            console.error("Error parsing error JSON:", e);
-          }
-        } else {
-          const isHtml = text.toLowerCase().includes('<!doctype html>') || text.toLowerCase().includes('<html>');
-          if (isHtml) {
-            if (res.url.includes('__cookie_check.html')) {
-              errorMessage = "Browser security is blocking the session in the preview. This is common in Safari or when 'Block Third-Party Cookies' is enabled. Please click 'Fix Session' below to authorize, then try again.";
-            } else {
-              errorMessage = `Server returned HTML instead of JSON (Status ${res.status}). Path: ${res.url}`;
-            }
-          } else {
-            errorMessage = `Server error (${res.status}): ${text.substring(0, 100)}...`;
-          }
-        }
-        throw new Error(errorMessage);
+
+      const payload = await response.json().catch(() => null);
+      if (!response.ok || !payload?.text) {
+        throw new Error(payload?.error || 'Failed to parse PDF.');
       }
-      
-      const { text } = await res.json();
-      console.log("PDF parsed successfully, text length:", text?.length);
-      if (!text || text.trim().length < 10) throw new Error('PDF seems empty or unreadable');
-      
-      setCvText(text);
-      setLoadingStep("Analyzing with AI Partner...");
-      console.log("Starting CV analysis for firm:", selectedFirm);
-      const analysis = await analyzeCV(text, selectedFirm);
+
+      setCvText(payload.text);
+      setLoadingStep('Analyzing with AI partner...');
+      const analysis = await analyzeCV(payload.text, selectedFirm);
       setCvAnalysis(analysis);
       setMode('cv-analyzer');
-    } catch (err: any) {
-      console.error(err);
-      let msg = err.message || 'An error occurred during analysis';
-      if (msg.includes('RESOURCE_EXHAUSTED') || msg.includes('429')) {
-        msg = "Gemini API quota exceeded. Please wait a moment or try again later.";
-      }
-      setError(msg);
+    } catch (err) {
+      setError(formatAIError('An error occurred during analysis.', err));
     } finally {
-      setIsAnalyzing(false);
-      setLoadingStep(null);
+      setIsWorking(false);
+      setLoadingStep('');
     }
   };
 
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({ 
-    onDrop, 
-    accept: { 'application/pdf': ['.pdf'] },
-    multiple: false 
+  const {getRootProps, getInputProps, isDragActive} = useDropzone({
+    onDrop,
+    accept: {'application/pdf': ['.pdf']},
+    multiple: false,
   } as any);
 
-  const [questionCount, setQuestionCount] = useState(0);
-
   const handleSearch = async () => {
-    setIsAnalyzing(true);
-    setLoadingStep("Searching Market Data...");
+    setIsWorking(true);
+    setLoadingStep('Searching market data...');
     setError(null);
-    try {
-      const res = await fetch('/api/search-firms', {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'X-Requested-With': 'XMLHttpRequest'
-        },
-        body: JSON.stringify({ query: selectedFirm }),
-        credentials: 'include'
-      });
-      
-      const contentType = res.headers.get("content-type");
-      const isJson = contentType && contentType.includes("application/json");
 
-      if (!res.ok || !isJson) {
-        const text = await res.text();
-        if (res.url.includes('__cookie_check.html')) {
-          throw new Error("Browser security is blocking the session in the preview. Please click 'Fix Session' below to authorize, then try again.");
-        }
-        throw new Error(isJson ? (JSON.parse(text).error || 'Search failed') : `Server error (${res.status})`);
-      }
-      
-      const data = await res.json();
-      const results = data.results || data; // Handle different API response structures
-      
-      setLoadingStep("Synthesizing Intelligence...");
-      const intel = await getFirmIntelligence(selectedFirm, JSON.stringify(results));
+    try {
+      const response = await fetch('/api/search-firms', {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Requested-With': 'XMLHttpRequest',
+        },
+        body: JSON.stringify({query: selectedFirm}),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.error || 'Search failed.');
+
+      setLoadingStep('Synthesizing firm intelligence...');
+      const intel = await getFirmIntelligence(selectedFirm, JSON.stringify(data.results || data));
       setIntelligence(intel);
       setMode('intelligence');
-    } catch (err: any) {
-      console.error(err);
-      setError(err.message || 'Failed to fetch intelligence');
+    } catch (err) {
+      setError(formatAIError('Failed to fetch intelligence.', err));
     } finally {
-      setIsAnalyzing(false);
-      setLoadingStep(null);
+      setIsWorking(false);
+      setLoadingStep('');
     }
   };
 
-  const startInterview = async () => {
+  const beginInterview = async () => {
     setMode('mock-interview');
     setMessages([]);
     setQuestionCount(1);
-    setIsTyping(true);
+    setInterviewComplete(false);
+    setIsWorking(true);
     setError(null);
-    
+
     try {
-      const apiKey = process.env.GEMINI_API_KEY;
-      if (!apiKey) throw new Error("GEMINI_API_KEY is missing. Please add it to AI Studio Secrets.");
-      
-      const ai = new GoogleGenAI({ apiKey });
-      const chat = ai.chats.create({
-        model: "gemini-3.1-flash-lite-preview",
-        config: {
-          systemInstruction: `You are John, a Senior Partner at ${selectedFirm}. You are conducting a high-stakes final round training contract interview. 
-          
-          THE INTERVIEW FORMAT:
-          1. In your first response, introduce yourself as John and ask exactly 5 challenging questions at once. 
-          2. Use clear headings: "### QUESTION 1", "### QUESTION 2", etc.
-          3. Focus on: Commercial Awareness, Firm Fit, and Legal Logic.
-          4. IMPORTANT: Tell the candidate to reply in the same format:
-             ### QUESTION 1
-             [Answer]
-             ### QUESTION 2
-             [Answer]
-             ...and so on.
-          
-          THE EVALUATION FORMAT:
-          Once the candidate provides their answers, analyze the entire batch in a single response:
-          - Use clear Markdown headings and double spacing between sections.
-          - For EACH answer:
-            ### EVALUATION: QUESTION [X]
-            **Score:** [1-10]/10
-            **Partner's Critique:** [Detailed feedback]
-            **Elite Rewrite:** [How a top-tier candidate would answer]
-          
-          - THE VERDICT:
-            At the end, provide a clear verdict section:
-            # FINAL VERDICT: [PASS/FAIL]
-            ## TRUE SCORE: [X]/100
-            [Brief summary of why they passed or failed]
-          
-          CRITICAL: At the VERY END of your evaluation, you MUST include:
-          [[SENTIMENT: X, AWARENESS: Y]]
-          Where X and Y are numbers between 0 and 100.
-          
-          The user's CV context: ${cvText.substring(0, 2000)}.`
-        }
-      });
-      chatSessionRef.current = chat;
-
-      const response = await chat.sendMessage({ message: "Start the interview. Introduce yourself and present all 5 questions now." });
-      if (!response.text) throw new Error("No response from AI");
-      
-      // Extract scores
-      const scoreMatch = response.text.match(/\[\[SENTIMENT: (\d+), AWARENESS: (\d+)\]\]/);
-      if (scoreMatch) {
-        setSentiment(parseInt(scoreMatch[1]));
-        setAwareness(parseInt(scoreMatch[2]));
-      }
-
-      setMessages([{ role: 'assistant', content: response.text.replace(/\[\[.*?\]\]/g, "").trim() }]);
-    } catch (err: any) {
-      console.error(err);
-      let msg = 'Failed to start interview';
-      if (err.message?.includes('RESOURCE_EXHAUSTED') || err.message?.includes('429')) {
-        msg = "Gemini API quota exceeded. Please wait a moment or try again later.";
-      }
-      setError(msg);
+      const text = await startMockInterview(selectedFirm, cvText);
+      setMessages([{role: 'assistant', content: text.replace(/\[\[.*?\]\]/g, '').trim()}]);
+    } catch (err) {
+      setError(formatAIError('Failed to start interview.', err));
     } finally {
-      setIsTyping(false);
+      setIsWorking(false);
     }
   };
 
-  const handleSendMessage = async () => {
-    if (!input.trim() || isTyping || !chatSessionRef.current) return;
+  const sendInterviewAnswer = async () => {
+    if (!input.trim() || isWorking || interviewComplete) return;
 
-    const userMsg = input;
+    const userMessage = input.trim();
+    const transcript: InterviewMessage[] = [...messages, {role: 'user', content: userMessage}];
     setInput('');
-    setMessages(prev => [...prev, { role: 'user', content: userMsg }]);
-    setIsTyping(true);
+    setMessages(transcript);
+    setIsWorking(true);
     setError(null);
 
     try {
-      console.log("Sending batch answers to AI");
-      const response = await chatSessionRef.current.sendMessage({ 
-        model: "gemini-3.1-flash-lite-preview",
-        message: `Here are my answers to all 5 questions: ${userMsg}. Please provide the full evaluation now.` 
-      });
-      if (!response.text) throw new Error("No response from AI");
-      
-      // Extract scores
-      const scoreMatch = response.text.match(/\[\[SENTIMENT: (\d+), AWARENESS: (\d+)\]\]/);
+      const text = await evaluateMockInterview(
+        selectedFirm,
+        cvText,
+        userMessage,
+        questionCount,
+        transcript,
+      );
+      const scoreMatch = text.match(/\[\[SENTIMENT: (\d+), AWARENESS: (\d+)\]\]/);
       if (scoreMatch) {
-        setSentiment(parseInt(scoreMatch[1]));
-        setAwareness(parseInt(scoreMatch[2]));
+        setSentiment(Number(scoreMatch[1]));
+        setAwareness(Number(scoreMatch[2]));
       }
-
-      setMessages(prev => [...prev, { role: 'assistant', content: response.text.replace(/\[\[.*?\]\]/g, "").trim() }]);
-      setQuestionCount(5); // Mark as complete
-    } catch (err: any) {
-      console.error("Chat Error:", err);
-      let msg = 'Failed to send message: ' + (err.message || 'Unknown error');
-      if (err.message?.includes('RESOURCE_EXHAUSTED') || err.message?.includes('429')) {
-        msg = "Gemini API quota exceeded. Please wait a moment or try again later.";
+      setMessages(prev => [
+        ...prev,
+        {role: 'assistant', content: text.replace(/\[\[.*?\]\]/g, '').trim()},
+      ]);
+      if (questionCount >= 5) {
+        setInterviewComplete(true);
+      } else {
+        setQuestionCount(prev => Math.min(prev + 1, 5));
       }
-      setError(msg);
+    } catch (err) {
+      setError(formatAIError('Failed to send message.', err));
     } finally {
-      setIsTyping(false);
+      setIsWorking(false);
     }
   };
 
@@ -385,632 +235,476 @@ export default function App() {
     setMode('dashboard');
     setMessages([]);
     setQuestionCount(0);
-    chatSessionRef.current = null;
+    setInterviewComplete(false);
+    setInput('');
   };
 
   return (
-    <div className="flex h-screen bg-[#0A0A0A] text-[#E5E5E5] font-sans selection:bg-emerald-500/30">
-      {/* Sidebar */}
-      <aside className="w-72 border-r border-white/5 bg-[#0D0D0D] flex flex-col p-6">
-        <div className="flex items-center gap-3 mb-12">
-          <div className="w-10 h-10 bg-white rounded-lg flex items-center justify-center">
-            <Shield className="text-black w-6 h-6" />
+    <div className="flex h-screen bg-[#0A0A0A] text-zinc-100 selection:bg-emerald-500/30">
+      <aside className="flex w-72 flex-col border-r border-white/5 bg-[#0D0D0D] p-6">
+        <div className="mb-12 flex items-center gap-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-white">
+            <Shield className="h-6 w-6 text-black" />
           </div>
-          <h1 className="text-xl font-serif font-semibold tracking-tight text-white">CLERKED</h1>
+          <h1 className="font-serif text-xl font-semibold text-white">CLERKED</h1>
         </div>
 
         <nav className="flex-1 space-y-2">
-          <button 
+          <button
             onClick={() => setMode('dashboard')}
             className={cn(
-              "w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200",
-              mode === 'dashboard' ? "bg-white/5 text-white" : "text-zinc-500 hover:text-zinc-300 hover:bg-white/5"
+              'flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium transition',
+              mode === 'dashboard'
+                ? 'bg-white/5 text-white'
+                : 'text-zinc-500 hover:bg-white/5 hover:text-zinc-300',
             )}
           >
             <BarChart3 size={20} />
-            <span className="text-sm font-medium">Dashboard</span>
+            Dashboard
           </button>
-          <div className="pt-6 pb-2 px-4">
-            <span className="text-[10px] uppercase tracking-widest text-zinc-600 font-bold">Active Firm</span>
+          <div className="px-4 pb-2 pt-6 text-[10px] font-bold uppercase tracking-widest text-zinc-600">
+            Active Firm
           </div>
-          <select 
+          <select
             value={selectedFirm}
-            onChange={(e) => setSelectedFirm(e.target.value)}
-            className="w-full bg-[#141414] border border-white/10 rounded-xl px-4 py-3 text-sm text-zinc-300 focus:outline-none focus:border-emerald-500/50 transition-colors"
+            onChange={event => setSelectedFirm(event.target.value)}
+            className="w-full rounded-xl border border-white/10 bg-[#141414] px-4 py-3 text-sm text-zinc-300 outline-none transition focus:border-emerald-500/50"
           >
-            {FIRMS.map(f => <option key={f} value={f}>{f}</option>)}
+            {FIRMS.map(firm => (
+              <option key={firm} value={firm}>
+                {firm}
+              </option>
+            ))}
           </select>
         </nav>
 
-        <div className="mt-auto pt-6 border-t border-white/5 space-y-4">
-          <div className="p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/20">
-            <div className="flex items-center gap-2 mb-2">
-              <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-              <span className="text-[10px] text-emerald-500 font-bold uppercase tracking-widest">Pro Plan</span>
+        <div className="mt-auto space-y-4 border-t border-white/5 pt-6">
+          <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/10 p-4">
+            <div className="mb-2 flex items-center gap-2">
+              <span className="h-2 w-2 rounded-full bg-emerald-500" />
+              <span className="text-[10px] font-bold uppercase tracking-widest text-emerald-500">
+                Pro Plan
+              </span>
             </div>
-            <p className="text-[11px] text-zinc-400 mb-3 leading-relaxed">Get unlimited CV analyses and priority interview slots.</p>
-            <button 
+            <p className="mb-3 text-[11px] leading-relaxed text-zinc-400">
+              Get unlimited CV analyses and priority interview slots.
+            </p>
+            <button
               onClick={() => setShowUpgradeModal(true)}
-              className="w-full py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl text-[10px] font-bold uppercase tracking-widest transition-all flex items-center justify-center gap-1"
+              className="w-full rounded-xl bg-emerald-500 px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-white transition hover:bg-emerald-600"
             >
-              Upgrade Now — <span className="line-through opacity-60">£19.99</span> <span className="text-white">£9.99/mo</span>
+              Upgrade Now - £9.99/mo
             </button>
           </div>
 
-          <div className="p-4 rounded-2xl bg-white/[0.02] border border-white/5">
-            <div className="flex items-center gap-2 mb-2">
+          <div className="rounded-2xl border border-white/5 bg-white/[0.02] p-4">
+            <div className="mb-2 flex items-center gap-2">
               <Users size={14} className="text-zinc-500" />
-              <span className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest">Referral Program</span>
+              <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">
+                Referral Program
+              </span>
             </div>
-            <p className="text-[11px] text-zinc-500 mb-3">Invite 3 friends to get 1 week of Pro for free.</p>
-            <button 
+            <p className="mb-3 text-[11px] text-zinc-500">
+              Invite 3 friends to get 1 week of Pro for free.
+            </p>
+            <button
               onClick={() => {
-                navigator.clipboard.writeText(`Check out Clerked - the AI coach for Magic Circle law interviews: ${window.location.origin}`);
-                alert("Referral link copied!");
+                navigator.clipboard.writeText(
+                  `Check out Clerked - the AI coach for Magic Circle interviews: ${window.location.origin}`,
+                );
+                alert('Referral link copied.');
               }}
-              className="w-full py-2 bg-white/5 hover:bg-white/10 text-white rounded-xl text-[10px] font-bold uppercase tracking-widest transition-all border border-white/10"
+              className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-white transition hover:bg-white/10"
             >
               Copy Invite Link
             </button>
           </div>
-          {error && error.includes('blocking session') && (
-            <button 
-              onClick={() => window.open(window.location.href, '_blank')}
-              className="w-full py-3 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 rounded-xl text-[10px] font-bold uppercase tracking-widest text-red-400 transition-all flex items-center justify-center gap-2"
-            >
-              <Shield size={12} />
-              Fix Session
-            </button>
-          )}
-          <div className="flex items-center gap-3 px-4 py-3 text-zinc-500">
+
+          <div className="flex items-center gap-3 px-4 py-3 text-xs text-zinc-500">
             <History size={18} />
-            <span className="text-xs">Session History</span>
+            Session History
           </div>
         </div>
       </aside>
 
-      {/* Main Content */}
-      <main className="flex-1 overflow-y-auto relative">
+      <main className="relative flex-1 overflow-y-auto">
         <AnimatePresence mode="wait">
           {mode === 'dashboard' && (
-            <motion.div 
+            <motion.section
               key="dashboard"
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -20 }}
-              className="max-w-4xl mx-auto py-20 px-8"
+              initial={{opacity: 0, y: 16}}
+              animate={{opacity: 1, y: 0}}
+              exit={{opacity: 0, y: -16}}
+              className="mx-auto max-w-4xl px-8 py-20"
             >
               <header className="mb-16">
-                <h2 className="text-5xl font-serif font-medium text-white mb-4 leading-tight">
+                <h2 className="mb-4 font-serif text-5xl font-medium leading-tight text-white">
                   Secure your future at <br />
-                  <span className="text-emerald-500 italic">{selectedFirm}</span>
+                  <span className="italic text-emerald-500">{selectedFirm}</span>
                 </h2>
-                <p className="text-zinc-400 text-lg max-w-2xl">
-                  <span className="text-white font-serif italic">Clerked</span> — The elite AI coach for Magic Circle training contracts. <span className="text-emerald-400 font-medium">Upload your CV first</span> for a highly refined, personalized interview experience tailored to your specific background.
+                <p className="max-w-2xl text-lg leading-relaxed text-zinc-400">
+                  <span className="font-serif italic text-white">Clerked</span> - the elite AI
+                  coach for Magic Circle training contracts. Upload your CV first for a
+                  personalized interview experience built from your actual background.
                 </p>
-                {API_KEY_MISSING && (
-                  <div className="mt-6 p-4 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center gap-3 text-amber-400 text-sm">
-                    <AlertCircle size={18} />
-                    <span>GEMINI_API_KEY is missing. AI features will not work. Please add it to AI Studio Secrets.</span>
-                  </div>
-                )}
               </header>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-12">
-                <div 
-                  {...getRootProps()} 
+              <div className="mb-12 grid grid-cols-1 gap-6 md:grid-cols-2">
+                <button
+                  {...getRootProps()}
                   className={cn(
-                    "group relative p-8 rounded-3xl border-2 border-dashed transition-all duration-300 cursor-pointer",
-                    isDragActive ? "border-emerald-500 bg-emerald-500/5" : "border-white/10 hover:border-white/20 bg-white/[0.02]"
+                    'group relative rounded-3xl border-2 border-dashed p-8 text-left transition',
+                    isDragActive
+                      ? 'border-emerald-500 bg-emerald-500/5'
+                      : 'border-white/10 bg-white/[0.02] hover:border-white/20',
                   )}
                 >
                   <input {...getInputProps()} />
-                  <div className="mb-6 w-12 h-12 rounded-2xl bg-white/5 flex items-center justify-center group-hover:bg-emerald-500/10 transition-colors">
-                    <Upload className="text-zinc-400 group-hover:text-emerald-500 transition-colors" />
-                  </div>
-                  <h3 className="text-xl font-medium text-white mb-2">CV Analyzer</h3>
-                  <p className="text-zinc-500 text-sm leading-relaxed">
-                    Upload your PDF CV for a ruthless partner-level critique and bullet point optimization.
+                  <ToolIcon icon={Upload} color="emerald" />
+                  <h3 className="mb-2 text-xl font-medium text-white">CV Analyzer</h3>
+                  <p className="text-sm leading-relaxed text-zinc-500">
+                    Upload your PDF CV for partner-level critique and bullet point optimization.
                   </p>
-                  {isAnalyzing && (
-                    <div className="absolute inset-0 bg-black/60 backdrop-blur-sm rounded-3xl flex flex-col items-center justify-center gap-3">
-                      <Loader2 className="animate-spin text-emerald-500" />
-                      <span className="text-xs text-emerald-500 font-medium">{loadingStep || "Analyzing..."}</span>
-                    </div>
-                  )}
-                </div>
+                </button>
 
-                <div 
-                  onClick={() => handleSearch()}
-                  className="group p-8 rounded-3xl border border-white/10 bg-white/[0.02] hover:border-white/20 transition-all duration-300 cursor-pointer relative overflow-hidden"
+                <button
+                  onClick={handleSearch}
+                  className="group rounded-3xl border border-white/10 bg-white/[0.02] p-8 text-left transition hover:border-white/20"
                 >
-                  <div className="mb-6 w-12 h-12 rounded-2xl bg-white/5 flex items-center justify-center group-hover:bg-blue-500/10 transition-colors">
-                    <Search className="text-zinc-400 group-hover:text-blue-500 transition-colors" />
-                  </div>
-                  <h3 className="text-xl font-medium text-white mb-2">Firm Intelligence</h3>
-                  <p className="text-zinc-500 text-sm leading-relaxed">
-                    Deep dive into {selectedFirm}'s recent deals, core values, and interview styles.
+                  <ToolIcon icon={Search} color="blue" />
+                  <h3 className="mb-2 text-xl font-medium text-white">Firm Intelligence</h3>
+                  <p className="text-sm leading-relaxed text-zinc-500">
+                    Deep dive into {selectedFirm}'s market position, culture, and interview style.
                   </p>
-                  {isAnalyzing && mode === 'dashboard' && (
-                    <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex flex-col items-center justify-center gap-3">
-                      <Loader2 className="animate-spin text-blue-500" />
-                      <span className="text-xs text-blue-500 font-medium">{loadingStep || "Searching..."}</span>
-                    </div>
-                  )}
-                </div>
+                </button>
               </div>
 
-              <div 
-                onClick={startInterview}
-                className="group p-8 rounded-3xl border border-white/10 bg-white/[0.02] hover:border-white/20 transition-all duration-300 cursor-pointer flex items-center justify-between"
+              <button
+                onClick={beginInterview}
+                className="flex w-full items-center justify-between rounded-3xl border border-white/10 bg-white/[0.02] p-8 text-left transition hover:border-white/20"
               >
                 <div className="flex items-center gap-6">
-                  <div className="w-12 h-12 rounded-2xl bg-white/5 flex items-center justify-center group-hover:bg-purple-500/10 transition-colors">
-                    <MessageSquare className="text-zinc-400 group-hover:text-purple-500 transition-colors" />
-                  </div>
+                  <ToolIcon icon={MessageSquare} color="purple" compact />
                   <div>
-                    <div className="flex items-center gap-3 mb-1">
+                    <div className="mb-1 flex items-center gap-3">
                       <h3 className="text-xl font-medium text-white">Mock Interview</h3>
-                      {!cvText && (
-                        <span className="text-[9px] bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 px-2 py-0.5 rounded-full font-bold uppercase tracking-widest animate-pulse">
-                          Pro Tip: Upload CV First
-                        </span>
-                      )}
+                      <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-1 text-[10px] font-bold uppercase tracking-widest text-emerald-500">
+                        Upload CV first
+                      </span>
                     </div>
-                    <p className="text-zinc-500 text-sm">Face a Senior Partner in a high-stakes simulation.</p>
+                    <p className="text-sm text-zinc-500">
+                      Face a senior partner in a one-question-at-a-time simulation.
+                    </p>
                   </div>
                 </div>
-                <ChevronRight className="text-zinc-600 group-hover:text-white transition-colors" />
-              </div>
-
-              {error && (
-                <motion.div 
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  className="mt-8 p-4 rounded-xl bg-red-500/10 border border-red-500/20 flex flex-col gap-3 text-red-400 text-sm"
-                >
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="flex items-center gap-3">
-                      <AlertCircle size={18} />
-                      {error}
-                    </div>
-                    <div className="flex items-center gap-2">
-                      {(error.includes('quota') || error.includes('demand') || error.includes('UNAVAILABLE')) && (
-                        <button 
-                          onClick={() => handleSearch()}
-                          className="px-3 py-1 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-all"
-                        >
-                          Try Again
-                        </button>
-                      )}
-                      <button onClick={() => setError(null)} className="text-xs hover:text-white transition-colors">Dismiss</button>
-                    </div>
-                  </div>
-                  {error.includes('blocking session') && (
-                    <div className="space-y-4">
-                      <p className="text-[11px] text-red-300/70 leading-relaxed italic">
-                        This happens because the preview is running in an iframe. Opening the app in a new tab will authorize your browser session.
-                      </p>
-                      <button 
-                        onClick={() => window.open(window.location.href, '_blank')}
-                        className="w-full py-3 bg-red-500 text-white hover:bg-red-600 rounded-xl text-xs font-bold uppercase tracking-widest transition-all shadow-lg shadow-red-500/20 flex items-center justify-center gap-2"
-                      >
-                        <Shield size={14} />
-                        Fix Session (Open in New Tab)
-                      </button>
-                    </div>
-                  )}
-                </motion.div>
-              )}
-            </motion.div>
+                <ChevronRight className="text-zinc-600" />
+              </button>
+            </motion.section>
           )}
 
           {mode === 'cv-analyzer' && cvAnalysis && (
-            <motion.div 
-              key="cv-analyzer"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="max-w-5xl mx-auto py-12 px-8"
+            <ReportView
+              title="CV Analysis"
+              subtitle={`${selectedFirm} benchmark`}
+              onBack={() => setMode('dashboard')}
             >
-              <button onClick={() => setMode('dashboard')} className="text-zinc-500 hover:text-white mb-8 flex items-center gap-2 text-sm">
-                <ChevronRight className="rotate-180" size={16} /> Back to Dashboard
-              </button>
-
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                <div className="lg:col-span-2 space-y-8">
-                  <section className="p-8 rounded-3xl bg-white/[0.02] border border-white/10">
-                    <h3 className="text-2xl font-serif text-white mb-6">Partner Feedback</h3>
-                    <div className="space-y-6">
-                      <div>
-                        <h4 className="text-xs uppercase tracking-widest text-emerald-500 font-bold mb-2">Structure</h4>
-                        <p className="text-zinc-300 leading-relaxed">{cvAnalysis.feedback.structure}</p>
-                      </div>
-                      <div>
-                        <h4 className="text-xs uppercase tracking-widest text-emerald-500 font-bold mb-2">Commercial Impact</h4>
-                        <p className="text-zinc-300 leading-relaxed">{cvAnalysis.feedback.commercialImpact}</p>
-                      </div>
-                      <div>
-                        <h4 className="text-xs uppercase tracking-widest text-emerald-500 font-bold mb-2">Legal Relevance</h4>
-                        <p className="text-zinc-300 leading-relaxed">{cvAnalysis.feedback.legalRelevance}</p>
-                      </div>
-                    </div>
-                  </section>
-
-                  <section className="p-8 rounded-3xl bg-white/[0.02] border border-white/10">
-                    <h3 className="text-2xl font-serif text-white mb-6">Elite Rewrites</h3>
-                    <div className="space-y-4">
-                      {cvAnalysis.rewrittenBullets.map((bullet, i) => (
-                        <div key={i} className="flex gap-4 p-4 rounded-xl bg-white/5 border border-white/5">
-                          <CheckCircle2 className="text-emerald-500 shrink-0" size={20} />
-                          <p className="text-sm text-zinc-300 italic">"{bullet}"</p>
-                        </div>
-                      ))}
-                    </div>
-                  </section>
+              <div className="grid gap-6 md:grid-cols-[220px_1fr]">
+                <div className="rounded-3xl border border-white/10 bg-white/[0.02] p-8 text-center">
+                  <div className="mb-2 font-serif text-6xl text-white">{cvAnalysis.score}</div>
+                  <p className="text-xs uppercase tracking-widest text-zinc-500">Overall score</p>
+                  <div className="mt-8 font-serif text-4xl text-emerald-400">
+                    {cvAnalysis.matchProbability}%
+                  </div>
+                  <p className="mt-2 text-xs uppercase tracking-widest text-zinc-500">Firm match</p>
                 </div>
-
-                <div className="space-y-8">
-                  <div className="p-8 rounded-3xl bg-white/[0.02] border border-white/10 text-center">
-                    <h4 className="text-zinc-500 text-sm mb-4">Overall Score</h4>
-                    <div className="relative w-32 h-32 mx-auto mb-4">
-                      <svg className="w-full h-full transform -rotate-90">
-                        <circle cx="64" cy="64" r="58" stroke="currentColor" strokeWidth="8" fill="transparent" className="text-white/5" />
-                        <circle cx="64" cy="64" r="58" stroke="currentColor" strokeWidth="8" fill="transparent" strokeDasharray={364} strokeDashoffset={364 - (364 * cvAnalysis.score) / 100} className="text-emerald-500" />
-                      </svg>
-                      <div className="absolute inset-0 flex items-center justify-center text-3xl font-serif text-white">
-                        {cvAnalysis.score}
-                      </div>
-                    </div>
-                    <p className="text-xs text-zinc-500">Magic Circle Benchmark</p>
-                  </div>
-
-                  <div className="p-8 rounded-3xl bg-white/[0.02] border border-white/10 text-center">
-                    <h4 className="text-zinc-500 text-sm mb-4">Firm Match Probability</h4>
-                    <div className="text-5xl font-serif text-white mb-2">{cvAnalysis.matchProbability}%</div>
-                    <p className="text-xs text-zinc-500">Based on {selectedFirm} values</p>
-                  </div>
+                <div className="space-y-4">
+                  {Object.entries(cvAnalysis.feedback).map(([label, value]) => (
+                    <InfoPanel key={label} title={label.replace(/([A-Z])/g, ' $1')}>
+                      {value}
+                    </InfoPanel>
+                  ))}
+                  <InfoPanel title="Rewritten bullets">
+                    <ul className="list-inside list-disc space-y-2">
+                      {cvAnalysis.rewrittenBullets.map((bullet, index) => (
+                        <li key={index}>{bullet}</li>
+                      ))}
+                    </ul>
+                  </InfoPanel>
                 </div>
               </div>
-            </motion.div>
+            </ReportView>
           )}
 
           {mode === 'intelligence' && intelligence && (
-            <motion.div 
-              key="intelligence"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="max-w-4xl mx-auto py-12 px-8"
+            <ReportView
+              title={intelligence.name}
+              subtitle="Strategic intelligence report"
+              onBack={() => setMode('dashboard')}
             >
-              <button onClick={() => setMode('dashboard')} className="text-zinc-500 hover:text-white mb-8 flex items-center gap-2 text-sm">
-                <ChevronRight className="rotate-180" size={16} /> Back to Dashboard
-              </button>
-
-              <header className="mb-12">
-                <h2 className="text-4xl font-serif text-white mb-2">{intelligence.name}</h2>
-                <p className="text-zinc-500">Strategic Intelligence Report</p>
-              </header>
-
-              <div className="grid grid-cols-1 gap-6">
-                {[
-                  { title: "Recent Deals & Market Position", content: intelligence.recentDeals, icon: Briefcase, color: "text-blue-500" },
-                  { title: "Core Values & Culture", content: intelligence.coreValues, icon: Shield, color: "text-emerald-500" },
-                  { title: "Interview Style & Focus", content: intelligence.interviewStyle, icon: Search, color: "text-purple-500" }
-                ].map((item, i) => (
-                  <div key={i} className="p-8 rounded-3xl bg-white/[0.02] border border-white/10">
-                    <div className="flex items-center gap-3 mb-6">
-                      <item.icon className={item.color} size={24} />
-                      <h3 className="text-xl font-medium text-white">{item.title}</h3>
-                    </div>
-                    <p className="text-zinc-300 leading-relaxed whitespace-pre-wrap">{item.content}</p>
-                  </div>
-                ))}
+              <div className="space-y-4">
+                <InfoPanel title="Recent deals and market position">{intelligence.recentDeals}</InfoPanel>
+                <InfoPanel title="Core values and culture">{intelligence.coreValues}</InfoPanel>
+                <InfoPanel title="Interview style and focus">{intelligence.interviewStyle}</InfoPanel>
               </div>
-            </motion.div>
+            </ReportView>
           )}
 
           {mode === 'mock-interview' && (
-            <motion.div 
-              key="mock-interview"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="h-full flex flex-col relative"
+            <motion.section
+              key="interview"
+              initial={{opacity: 0}}
+              animate={{opacity: 1}}
+              exit={{opacity: 0}}
+              className="flex h-full flex-col"
             >
-              {/* Virtual Office Background */}
-              <div className="absolute inset-0 z-0 opacity-20 pointer-events-none">
-                <img 
-                  src="https://images.unsplash.com/photo-1497366216548-37526070297c?auto=format&fit=crop&q=80&w=1920" 
-                  alt="Virtual Office"
-                  className="w-full h-full object-cover grayscale"
-                  referrerPolicy="no-referrer"
-                />
-                <div className="absolute inset-0 bg-gradient-to-b from-[#0A0A0A] via-transparent to-[#0A0A0A]" />
-              </div>
-
-              <div className="p-6 border-b border-white/5 flex items-center justify-between bg-[#0D0D0D]/80 backdrop-blur-md z-10">
+              <div className="flex items-center justify-between border-b border-white/5 bg-[#0D0D0D]/90 p-6">
                 <div className="flex items-center gap-4">
                   <button onClick={() => setMode('dashboard')} className="text-zinc-500 hover:text-white">
                     <ChevronRight className="rotate-180" size={20} />
                   </button>
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-full bg-zinc-800 border border-white/10 flex items-center justify-center overflow-hidden">
-                      <Briefcase className="text-zinc-400" size={20} />
-                    </div>
-                    <div>
-                      <h3 className="text-white font-medium">Senior Partner, {selectedFirm}</h3>
-                      <p className="text-[10px] text-zinc-500 uppercase tracking-widest">
-                        {questionCount === 1 ? "Awaiting Batch Answers" : "Evaluation Complete"}
-                      </p>
-                    </div>
+                  <div>
+                    <h3 className="font-medium text-white">Senior Partner, {selectedFirm}</h3>
+                    <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">
+                      {interviewComplete ? 'Evaluation complete' : `Question ${questionCount} of 5`}
+                    </p>
                   </div>
                 </div>
-                
-                <div className="flex items-center gap-8">
-                  {/* Stress Indicators */}
-                  <div className="hidden md:flex items-center gap-6">
-                    <div className="space-y-1.5 w-32">
-                      <div className="flex justify-between text-[9px] uppercase tracking-tighter font-bold">
-                        <span className="text-zinc-500">Sentiment</span>
-                        <span className={cn(sentiment > 50 ? "text-emerald-500" : "text-red-500")}>{sentiment}%</span>
-                      </div>
-                      <div className="h-1 bg-white/5 rounded-full overflow-hidden">
-                        <motion.div 
-                          initial={{ width: 0 }}
-                          animate={{ width: `${sentiment}%` }}
-                          className={cn("h-full transition-colors duration-500", sentiment > 50 ? "bg-emerald-500" : "bg-red-500")}
-                        />
-                      </div>
-                    </div>
-                    <div className="space-y-1.5 w-32">
-                      <div className="flex justify-between text-[9px] uppercase tracking-tighter font-bold">
-                        <span className="text-zinc-500">Awareness</span>
-                        <span className={cn(awareness > 50 ? "text-blue-500" : "text-amber-500")}>{awareness}%</span>
-                      </div>
-                      <div className="h-1 bg-white/5 rounded-full overflow-hidden">
-                        <motion.div 
-                          initial={{ width: 0 }}
-                          animate={{ width: `${awareness}%` }}
-                          className={cn("h-full transition-colors duration-500", awareness > 50 ? "bg-blue-500" : "bg-amber-500")}
-                        />
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-4">
-                    <button 
-                      onClick={resetInterview}
-                      className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
-                    >
-                      Reset
-                    </button>
-                    <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20">
-                      <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                      <span className="text-[10px] text-emerald-500 font-bold uppercase tracking-widest">Live</span>
-                    </div>
-                  </div>
+                <div className="hidden items-center gap-6 md:flex">
+                  <Meter label="Sentiment" value={sentiment} color="emerald" />
+                  <Meter label="Awareness" value={awareness} color="blue" />
+                  <button onClick={resetInterview} className="text-xs text-zinc-500 hover:text-white">
+                    Reset
+                  </button>
                 </div>
               </div>
 
-              <div className="flex-1 overflow-y-auto p-8 space-y-8 z-10">
-                {messages.map((msg, i) => {
-                  const isPass = msg.content.includes('FINAL VERDICT: PASS');
-                  const isFail = msg.content.includes('FINAL VERDICT: FAIL');
-                  const hasVerdict = isPass || isFail;
-
-                  return (
-                    <div key={i} className={cn(
-                      "flex flex-col max-w-4xl mx-auto",
-                      msg.role === 'user' ? "items-end" : "items-start"
-                    )}>
-                      <div className={cn(
-                        "p-8 rounded-3xl text-sm leading-relaxed shadow-2xl",
-                        msg.role === 'user' 
-                          ? "bg-emerald-600 text-white rounded-tr-none" 
-                          : "bg-[#141414] text-zinc-300 border border-white/5 rounded-tl-none w-full"
-                      )}>
-                        {msg.role === 'assistant' ? (
-                          <div className="prose prose-invert prose-sm max-w-none">
-                            <ReactMarkdown
-                              components={{
-                                h1: ({node, ...props}) => <h1 className="text-2xl font-bold text-white mb-6 border-b border-white/10 pb-4" {...props} />,
-                                h2: ({node, ...props}) => <h2 className="text-xl font-semibold text-white mt-8 mb-4" {...props} />,
-                                h3: ({node, ...props}) => <h3 className="text-lg font-medium text-emerald-400 mt-6 mb-3 uppercase tracking-wider" {...props} />,
-                                p: ({node, ...props}) => <p className="mb-4 text-zinc-400 leading-relaxed" {...props} />,
-                                strong: ({node, ...props}) => <strong className="text-white font-semibold" {...props} />,
-                                ul: ({node, ...props}) => <ul className="list-disc list-inside mb-4 space-y-2" {...props} />,
-                              }}
-                            >
-                              {msg.content}
-                            </ReactMarkdown>
-
-                            {hasVerdict && (
-                              <motion.div 
-                                initial={{ scale: 0.9, opacity: 0 }}
-                                animate={{ scale: 1, opacity: 1 }}
-                                className={cn(
-                                  "mt-12 p-8 rounded-2xl border-2 flex flex-col items-center text-center gap-4",
-                                  isPass 
-                                    ? "bg-emerald-500/10 border-emerald-500/50" 
-                                    : "bg-red-500/10 border-red-500/50"
-                                )}
-                              >
-                                <div className={cn(
-                                  "w-16 h-16 rounded-full flex items-center justify-center mb-2",
-                                  isPass ? "bg-emerald-500 text-white" : "bg-red-500 text-white"
-                                )}>
-                                  {isPass ? <CheckCircle2 size={32} /> : <XCircle size={32} />}
-                                </div>
-                                <div>
-                                  <h2 className={cn(
-                                    "text-3xl font-black uppercase tracking-tighter mb-1",
-                                    isPass ? "text-emerald-400" : "text-red-400"
-                                  )}>
-                                    {isPass ? "OFFER EXTENDED" : "APPLICATION REJECTED"}
-                                  </h2>
-                                  <p className="text-zinc-500 text-xs uppercase tracking-widest font-bold">
-                                    Final Partner Review Complete
-                                  </p>
-                                </div>
-                                <div className="flex flex-col sm:flex-row items-center gap-4 mt-8">
-                                  <button 
-                                    onClick={() => {
-                                      const text = `I just scored ${msg.content.match(/TRUE SCORE: (\d+)\/100/)?.[1] || "N/A"}/100 in a Magic Circle mock interview on Clerked! 🚀\n\nThink you can beat my score? Try it here: ${window.location.origin}`;
-                                      window.open(`https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent(window.location.origin)}&text=${encodeURIComponent(text)}`, '_blank');
-                                    }}
-                                    className="flex items-center gap-2 px-6 py-3 bg-[#0077b5] hover:bg-[#0077b5]/90 text-white rounded-xl text-xs font-bold uppercase tracking-widest transition-all"
-                                  >
-                                    <Share2 size={16} />
-                                    Share on LinkedIn
-                                  </button>
-                                  <button 
-                                    onClick={() => setMode('dashboard')}
-                                    className="px-6 py-3 bg-white/5 hover:bg-white/10 text-white rounded-xl text-xs font-bold uppercase tracking-widest transition-all border border-white/10"
-                                  >
-                                    Back to Dashboard
-                                  </button>
-                                </div>
-                              </motion.div>
-                            )}
-                          </div>
-                        ) : (
-                          <div className="whitespace-pre-wrap">{msg.content}</div>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-                {isTyping && (
-                  <div className="flex flex-col gap-2 max-w-md">
-                    <div className="flex items-center gap-2 text-zinc-500 text-xs italic">
-                      <Loader2 className="animate-spin" size={14} />
-                      Partner is typing...
-                    </div>
-                    <motion.div 
-                      initial={{ opacity: 0, x: -10 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      key={currentJoke}
-                      className="p-4 rounded-2xl bg-white/5 border border-white/5 text-[11px] text-zinc-500 italic leading-relaxed"
+              <div className="flex-1 space-y-6 overflow-y-auto p-8">
+                {messages.map((message, index) => (
+                  <div
+                    key={index}
+                    className={cn(
+                      'mx-auto flex max-w-4xl',
+                      message.role === 'user' ? 'justify-end' : 'justify-start',
+                    )}
+                  >
+                    <div
+                      className={cn(
+                        'max-w-3xl rounded-3xl p-6 text-sm leading-relaxed',
+                        message.role === 'user'
+                          ? 'rounded-tr-none bg-emerald-600 text-white'
+                          : 'w-full rounded-tl-none border border-white/5 bg-[#141414] text-zinc-300',
+                      )}
                     >
-                      "{currentJoke}"
-                    </motion.div>
+                      {message.role === 'assistant' ? (
+                        <ReactMarkdown>{message.content}</ReactMarkdown>
+                      ) : (
+                        <div className="whitespace-pre-wrap">{message.content}</div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+
+                {isWorking && (
+                  <div className="mx-auto flex max-w-4xl items-center gap-3 text-sm italic text-zinc-500">
+                    <Loader2 className="animate-spin" size={16} />
+                    {loadingLine}
                   </div>
                 )}
                 <div ref={chatEndRef} />
               </div>
 
-              <div className="p-8 border-t border-white/5 bg-[#0D0D0D]/80 backdrop-blur-md z-10">
-                {error && (
-                  <motion.div 
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    className="max-w-3xl mx-auto mb-6 p-4 rounded-xl bg-red-500/10 border border-red-500/20 flex flex-col gap-3 text-red-400 text-sm"
-                  >
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="flex items-center gap-3">
-                        <AlertCircle size={18} />
-                        {error}
-                      </div>
-                      <div className="flex items-center gap-2">
-                        {(error.includes('quota') || error.includes('demand') || error.includes('UNAVAILABLE')) && (
-                          <button 
-                            onClick={() => handleSendMessage()}
-                            className="px-3 py-1 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-all"
-                          >
-                            Try Again
-                          </button>
-                        )}
-                        <button onClick={() => setError(null)} className="text-xs hover:text-white transition-colors">Dismiss</button>
-                      </div>
-                    </div>
-                  </motion.div>
-                )}
-                <div className="max-w-3xl mx-auto relative">
-                  <textarea 
+              <div className="border-t border-white/5 bg-[#0D0D0D]/90 p-8">
+                <div className="relative mx-auto max-w-3xl">
+                  <textarea
                     value={input}
-                    onChange={(e) => setInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && !e.shiftKey) {
-                        e.preventDefault();
-                        handleSendMessage();
+                    onChange={event => setInput(event.target.value)}
+                    onKeyDown={event => {
+                      if (event.key === 'Enter' && !event.shiftKey) {
+                        event.preventDefault();
+                        sendInterviewAnswer();
                       }
                     }}
-                    placeholder={questionCount === 1 ? "Provide all 5 answers here...\n\n### QUESTION 1\n[Your Answer]\n\n### QUESTION 2\n[Your Answer]..." : "Interview complete."}
-                    disabled={questionCount > 1}
-                    className="w-full bg-[#141414] border border-white/10 rounded-2xl px-6 py-4 pr-16 text-sm text-zinc-300 focus:outline-none focus:border-emerald-500/50 transition-colors resize-none h-48"
+                    placeholder={
+                      interviewComplete ? 'Interview complete.' : `Answer Question ${questionCount}...`
+                    }
+                    disabled={interviewComplete}
+                    className="h-36 w-full resize-none rounded-2xl border border-white/10 bg-[#141414] px-6 py-4 pr-16 text-sm text-zinc-300 outline-none transition focus:border-emerald-500/50 disabled:opacity-60"
                   />
-                  <button 
-                    onClick={handleSendMessage}
-                    disabled={isTyping || !input.trim() || questionCount > 1}
-                    className="absolute right-4 bottom-4 w-10 h-10 bg-white rounded-xl flex items-center justify-center text-black hover:bg-emerald-500 hover:text-white transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                  <button
+                    onClick={sendInterviewAnswer}
+                    disabled={isWorking || !input.trim() || interviewComplete}
+                    className="absolute bottom-4 right-4 flex h-10 w-10 items-center justify-center rounded-xl bg-white text-black transition hover:bg-emerald-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     <Send size={18} />
                   </button>
                 </div>
-                <p className="text-center text-[10px] text-zinc-600 mt-4 uppercase tracking-widest">
-                  Professionalism is expected. Be concise and commercially focused.
-                </p>
               </div>
-            </motion.div>
+            </motion.section>
           )}
         </AnimatePresence>
 
-        {/* Upgrade Modal */}
+        {error && (
+          <div className="fixed bottom-6 left-1/2 z-50 flex max-w-xl -translate-x-1/2 items-center gap-3 rounded-2xl border border-red-500/20 bg-red-500/10 px-5 py-4 text-sm text-red-300 backdrop-blur">
+            <AlertCircle size={18} />
+            <span>{error}</span>
+            <button onClick={() => setError(null)} className="ml-2 text-red-200 hover:text-white">
+              <XCircle size={18} />
+            </button>
+          </div>
+        )}
+
+        {isWorking && mode !== 'mock-interview' && (
+          <div className="fixed inset-0 z-40 grid place-items-center bg-black/50 backdrop-blur-sm">
+            <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-[#141414] px-6 py-4 text-sm text-zinc-300">
+              <Loader2 className="animate-spin text-emerald-500" size={18} />
+              {loadingStep || loadingLine}
+            </div>
+          </div>
+        )}
+
         <AnimatePresence>
           {showUpgradeModal && (
-            <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/80 backdrop-blur-sm"
+            <motion.div
+              initial={{opacity: 0}}
+              animate={{opacity: 1}}
+              exit={{opacity: 0}}
+              className="fixed inset-0 z-50 grid place-items-center bg-black/80 p-6 backdrop-blur-sm"
             >
-              <motion.div 
-                initial={{ scale: 0.9, y: 20 }}
-                animate={{ scale: 1, y: 0 }}
-                exit={{ scale: 0.9, y: 20 }}
-                className="bg-[#141414] border border-white/10 rounded-3xl p-8 max-w-md w-full text-center relative overflow-hidden"
+              <motion.div
+                initial={{scale: 0.95, y: 12}}
+                animate={{scale: 1, y: 0}}
+                exit={{scale: 0.95, y: 12}}
+                className="relative w-full max-w-md rounded-3xl border border-white/10 bg-[#141414] p-8 text-center"
               >
-                <div className="absolute top-0 left-0 w-full h-1 bg-emerald-500" />
-                <button 
+                <button
                   onClick={() => setShowUpgradeModal(false)}
-                  className="absolute top-4 right-4 text-zinc-500 hover:text-white transition-colors"
+                  className="absolute right-4 top-4 text-zinc-500 hover:text-white"
                 >
                   <XCircle size={24} />
                 </button>
-                
-                <div className="w-16 h-16 bg-emerald-500/10 rounded-2xl flex items-center justify-center mx-auto mb-6">
-                  <Shield className="text-emerald-500" size={32} />
-                </div>
-                
-                <h3 className="text-2xl font-serif text-white mb-2">Clerked Pro</h3>
-                <p className="text-zinc-400 text-sm mb-8 leading-relaxed">
-                  We're currently integrating Stripe for secure payments. <br />
-                  <span className="text-emerald-400 font-medium italic">Join the waitlist</span> to lock in <span className="line-through opacity-50">£19.99</span> <span className="text-emerald-400 font-bold">£9.99/mo</span> (50% OFF) for your first year!
+                <Shield className="mx-auto mb-6 text-emerald-500" size={40} />
+                <h3 className="mb-2 font-serif text-2xl text-white">Clerked Pro</h3>
+                <p className="mb-8 text-sm leading-relaxed text-zinc-400">
+                  Stripe payments are being integrated. Join the waitlist to lock in £9.99/mo
+                  for your first year.
                 </p>
-                
-                <div className="space-y-4">
-                  <input 
-                    type="email" 
-                    placeholder="Enter your email"
-                    className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-emerald-500/50 transition-colors"
-                  />
-                  <button 
-                    onClick={() => {
-                      alert("You're on the list! We'll notify you when Pro launches.");
-                      setShowUpgradeModal(false);
-                    }}
-                    className="w-full py-4 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl text-xs font-bold uppercase tracking-widest transition-all"
-                  >
-                    Join the Waitlist
-                  </button>
-                </div>
-                
-                <p className="mt-6 text-[10px] text-zinc-600 uppercase tracking-widest">
-                  No credit card required for waitlist
-                </p>
+                <input
+                  type="email"
+                  placeholder="Enter your email"
+                  className="mb-4 w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none focus:border-emerald-500/50"
+                />
+                <button
+                  onClick={() => setShowUpgradeModal(false)}
+                  className="w-full rounded-xl bg-emerald-500 py-4 text-xs font-bold uppercase tracking-widest text-white hover:bg-emerald-600"
+                >
+                  Join the Waitlist
+                </button>
               </motion.div>
             </motion.div>
           )}
         </AnimatePresence>
       </main>
+    </div>
+  );
+}
+
+function ToolIcon({
+  icon: Icon,
+  color,
+  compact = false,
+}: {
+  icon: typeof Upload;
+  color: 'emerald' | 'blue' | 'purple';
+  compact?: boolean;
+}) {
+  const colorClass = {
+    emerald: 'group-hover:text-emerald-500 group-hover:bg-emerald-500/10',
+    blue: 'group-hover:text-blue-500 group-hover:bg-blue-500/10',
+    purple: 'group-hover:text-purple-500 group-hover:bg-purple-500/10',
+  }[color];
+
+  return (
+    <div
+      className={cn(
+        'mb-6 flex items-center justify-center rounded-2xl bg-white/5 text-zinc-400 transition',
+        compact ? 'mb-0 h-12 w-12' : 'h-12 w-12',
+        colorClass,
+      )}
+    >
+      <Icon size={24} />
+    </div>
+  );
+}
+
+function ReportView({
+  title,
+  subtitle,
+  onBack,
+  children,
+}: {
+  title: string;
+  subtitle: string;
+  onBack: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <motion.section
+      key={title}
+      initial={{opacity: 0, y: 16}}
+      animate={{opacity: 1, y: 0}}
+      exit={{opacity: 0, y: -16}}
+      className="mx-auto max-w-5xl px-8 py-12"
+    >
+      <button
+        onClick={onBack}
+        className="mb-8 flex items-center gap-2 text-sm text-zinc-500 hover:text-white"
+      >
+        <ChevronRight className="rotate-180" size={16} />
+        Back to Dashboard
+      </button>
+      <header className="mb-10">
+        <h2 className="mb-2 font-serif text-4xl text-white">{title}</h2>
+        <p className="text-sm uppercase tracking-widest text-zinc-500">{subtitle}</p>
+      </header>
+      {children}
+    </motion.section>
+  );
+}
+
+function InfoPanel({title, children}: {title: string; children: React.ReactNode}) {
+  return (
+    <section className="rounded-3xl border border-white/10 bg-white/[0.02] p-6">
+      <h3 className="mb-3 text-sm font-bold uppercase tracking-widest text-emerald-400">
+        {title}
+      </h3>
+      <div className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-300">{children}</div>
+    </section>
+  );
+}
+
+function Meter({
+  label,
+  value,
+  color,
+}: {
+  label: string;
+  value: number;
+  color: 'emerald' | 'blue';
+}) {
+  return (
+    <div className="w-32 space-y-1.5">
+      <div className="flex justify-between text-[9px] font-bold uppercase tracking-tight">
+        <span className="text-zinc-500">{label}</span>
+        <span className={color === 'emerald' ? 'text-emerald-500' : 'text-blue-500'}>
+          {value}%
+        </span>
+      </div>
+      <div className="h-1 overflow-hidden rounded-full bg-white/5">
+        <div
+          className={cn('h-full', color === 'emerald' ? 'bg-emerald-500' : 'bg-blue-500')}
+          style={{width: `${value}%`}}
+        />
+      </div>
     </div>
   );
 }
